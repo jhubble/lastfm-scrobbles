@@ -1,9 +1,12 @@
 import fs from 'fs';
 import readline from 'readline';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // --- CONFIGURATION ---
 // Get your free Last.fm API key from: https://www.last.fm/api/account/create
-const API_KEY = 'YOUR_LASTFM_API_KEY_HERE';
+const API_KEY = process.env.LASTFM_API_KEY || 'YOUR_LASTFM_API_KEY_HERE';
 const BASE_URL = 'http://ws.audioscrobbler.com/2.0/';
 
 const rl = readline.createInterface({
@@ -18,6 +21,24 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Helper: Get filename for user data
 const getFilename = (username) => `${username.toLowerCase()}_scrobbles.json`;
+const getProgressFilename = (username) => `${username.toLowerCase()}_download_progress.json`;
+
+const loadProgressData = (username) => {
+    const filename = getProgressFilename(username);
+    if (fs.existsSync(filename)) {
+        try {
+            return JSON.parse(fs.readFileSync(filename, 'utf8'));
+        } catch (err) {
+            return null;
+        }
+    }
+    return null;
+};
+
+const saveProgressData = (username, progress) => {
+    const filename = getProgressFilename(username);
+    fs.writeFileSync(filename, JSON.stringify(progress, null, 2));
+};
 
 // Load local scrobbles if they exist
 const loadLocalData = (username) => {
@@ -63,37 +84,97 @@ const fetchPage = async (username, page, limit = 200) => {
     }
 };
 
-// --- FUNCTION 1: Download ALL scrobbles ---
+// --- FUNCTION 1: Download ALL scrobbles (with incremental saves and resume) ---
 async function downloadAllScrobbles(username) {
-    console.log(`\nInitializing full download for user: ${username}...`);
+    console.log(`\nChecking download status for user: ${username}...`);
     
-    // Fetch page 1 to get total pages and total tracks count
-    const initialData = await fetchPage(username, 1, 200);
-    if (!initialData) return;
+    let existingProgress = loadProgressData(username);
+    let localScrobbles = loadLocalData(username);
+    let startPage = 1;
+    let totalPages = 1;
+    let totalTracks = 0;
 
-    const totalPages = parseInt(initialData['@attr'].totalPages, 10);
-    const totalTracks = parseInt(initialData['@attr'].total, 10);
+    const canResume = existingProgress &&
+        existingProgress.status !== 'completed' &&
+        existingProgress.lastPageFetched > 0;
 
-    console.log(`Found ${totalTracks} total scrobbles across ${totalPages} pages.`);
+    if (canResume) {
+        const ans = await question(`Found partially completed download at page ${existingProgress.lastPageFetched} of ${existingProgress.totalPages} (${localScrobbles.length} tracks saved). Resume? (Y/n): `);
+        if (ans.trim().toLowerCase() !== 'n') {
+            startPage = existingProgress.lastPageFetched + 1;
+            totalPages = existingProgress.totalPages || 1;
+            totalTracks = existingProgress.totalTracks || 0;
+            console.log(`Resuming download from page ${startPage} of ${totalPages}...`);
+        } else {
+            console.log('Restarting download from page 1...');
+            localScrobbles = [];
+            startPage = 1;
+        }
+    }
 
-    let allTracks = [];
-    // Filter out currently playing track if it has no date yet
-    const tracksOnPage1 = initialData.track.filter(t => t.date && t.date.uts);
-    allTracks.push(...tracksOnPage1);
+    if (startPage === 1) {
+        // Fetch page 1 to get total pages and total tracks count
+        const initialData = await fetchPage(username, 1, 200);
+        if (!initialData) return;
 
-    for (let page = 2; page <= totalPages; page++) {
+        totalPages = parseInt(initialData['@attr']?.totalPages || '1', 10);
+        totalTracks = parseInt(initialData['@attr']?.total || '0', 10);
+
+        console.log(`Found ${totalTracks} total scrobbles across ${totalPages} pages.`);
+
+        const raw = Array.isArray(initialData.track) ? initialData.track : (initialData.track ? [initialData.track] : []);
+        const page1Tracks = raw.filter(t => t && t.date && t.date.uts);
+        localScrobbles = page1Tracks;
+
+        // Incremental save of page 1
+        saveLocalData(username, localScrobbles);
+        saveProgressData(username, {
+            username,
+            status: totalPages <= 1 ? 'completed' : 'in_progress',
+            lastPageFetched: 1,
+            totalPages,
+            totalTracks,
+            savedTracksCount: localScrobbles.length,
+            updatedAt: new Date().toISOString()
+        });
+
+        if (totalPages <= 1) {
+            console.log(`\nDownload complete! Total valid scrobbles fetched: ${localScrobbles.length}`);
+            return;
+        }
+
+        startPage = 2;
+    }
+
+    for (let page = startPage; page <= totalPages; page++) {
         process.stdout.write(`Downloading page ${page} of ${totalPages}...\r`);
         const pageData = await fetchPage(username, page, 200);
         if (pageData && pageData.track) {
-            const validTracks = pageData.track.filter(t => t.date && t.date.uts);
-            allTracks.push(...validTracks);
+            const raw = Array.isArray(pageData.track) ? pageData.track : [pageData.track];
+            const validTracks = raw.filter(t => t && t.date && t.date.uts);
+            if (validTracks.length > 0) {
+                localScrobbles.push(...validTracks);
+                // Incremental save to disk after every page
+                saveLocalData(username, localScrobbles);
+            }
         }
+
+        const isComplete = page >= totalPages;
+        saveProgressData(username, {
+            username,
+            status: isComplete ? 'completed' : 'in_progress',
+            lastPageFetched: page,
+            totalPages,
+            totalTracks,
+            savedTracksCount: localScrobbles.length,
+            updatedAt: new Date().toISOString()
+        });
+
         // Be nice to Last.fm API limits
         await sleep(250);
     }
 
-    console.log(`\nDownload complete! Total valid scrobbles fetched: ${allTracks.length}`);
-    saveLocalData(username, allTracks);
+    console.log(`\nDownload complete! Total valid scrobbles fetched: ${localScrobbles.length}`);
 }
 
 // --- FUNCTION 2: Fetch NEWER scrobbles ---
@@ -230,7 +311,7 @@ async function main() {
         }
 
         switch (choice) {
-            :
+            case '1':
                 await downloadAllScrobbles(username.trim());
                 break;
             case '2':
