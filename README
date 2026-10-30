@@ -1,0 +1,12 @@
+Allows fetching all scrobbles from last.fm and doing something with them.
+
+To use:
+* Create a few API Key at Last.fm
+* create an .env file with API key (see example file in repo)
+
+# Start with:
+npm start
+
+# Access in a browser on localhost:3000
+
+# Enter last.fm user id and click button to download
