@@ -10,6 +10,8 @@ const setStatus = (msg) => {
 
 // Activity Log Helper
 function addActivityLog(message, type = 'info') {
+  // Log to console for debugging
+  console.log('Activity Log:', message, type);
   const logEl = document.getElementById('activityLog');
   const countEl = document.getElementById('logCounter');
   if (!logEl) return;
@@ -26,6 +28,7 @@ function addActivityLog(message, type = 'info') {
   if (countEl) countEl.innerText = `${activityLogCount} events`;
 }
 
+
 function clearActivityLog() {
   const logEl = document.getElementById('activityLog');
   const countEl = document.getElementById('logCounter');
@@ -34,7 +37,22 @@ function clearActivityLog() {
   if (countEl) countEl.innerText = '0 events';
 }
 
-// Throttle Controls Management
+document.addEventListener('DOMContentLoaded', () => {
+  const btnFetch = document.getElementById('btnFetch');
+  if (btnFetch) btnFetch.addEventListener('click', () => fetchLocalData());
+  const btnDownload = document.getElementById('btnDownload');
+  if (btnDownload) btnDownload.addEventListener('click', () => downloadAll({ resume: true }));
+  const btnSync = document.getElementById('btnSync');
+  if (btnSync) btnSync.addEventListener('click', () => syncNewer());
+  const btnRestart = document.getElementById('btnRestart');
+  if (btnRestart) btnRestart.addEventListener('click', () => restartDownload());
+  const btnPause = document.getElementById('btnPause');
+  if (btnPause) btnPause.addEventListener('click', () => pauseDownload());
+  // Global error handler
+  window.addEventListener('error', e => {
+    console.error('Global error caught:', e.error);
+  });
+});
 function getSelectedThrottleMs() {
   return selectedThrottleMs || 1000;
 }
@@ -354,6 +372,8 @@ function connectProgressStream(username) {
 }
 
 async function fetchLocalData(silent = false) {
+  console.log('fetchLocalData called with silent=', silent);
+
   const username = document.getElementById('username').value.trim();
   if (!username) return alert('Please enter a username');
 
@@ -492,9 +512,7 @@ async function syncNewer() {
     setButtonsBusy(false);
   }
 }
-}
 
-// Auto-check status when username changes
 const usernameInput = document.getElementById('username');
 if (usernameInput) {
   usernameInput.addEventListener('input', (e) => {
