@@ -24,7 +24,12 @@ function formatLog(level, category, message, meta) {
   let metaStr = '';
   if (meta !== undefined) {
     if (meta instanceof Error) {
-      metaStr = ` | ${meta.stack || meta.message}`;
+      const codeStr = meta.code ? ` [Code: ${meta.code}]` : '';
+      const causeStr = meta.cause
+        ? ` [Cause: ${meta.cause.code ? `${meta.cause.code} - ` : ''}${meta.cause.message || meta.cause}]`
+        : '';
+      const statusStr = meta.status ? ` [HTTP ${meta.status}]` : '';
+      metaStr = ` | ${meta.message}${statusStr}${codeStr}${causeStr}${meta.stack ? `\n${meta.stack}` : ''}`;
     } else if (typeof meta === 'object') {
       try {
         metaStr = ` | ${JSON.stringify(meta)}`;
@@ -170,38 +175,294 @@ async function saveDownloadProgress(username, progress) {
   await fs.writeFile(filePath, JSON.stringify(progress, null, 2));
 }
 
-// Fetch single page from Last.fm
-async function fetchLastFmPage(username, page = 1, limit = 200) {
+// Helper: Sleep
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// --- Last.fm API Throttling & Network Error Utilities ---
+let lastFmLastRequestTime = 0;
+// Default to 1000ms (1 request/sec) or configured LASTFM_THROTTLE_MS
+let currentLastFmThrottleMs = Math.max(100, parseInt(process.env.LASTFM_THROTTLE_MS || '1000', 10));
+
+function getThrottleMs() {
+  return currentLastFmThrottleMs;
+}
+
+function setThrottleMs(ms) {
+  const parsed = parseInt(ms, 10);
+  if (!isNaN(parsed) && parsed >= 100) {
+    currentLastFmThrottleMs = parsed;
+    logger.info('LastFM', `Throttle rate set to ${parsed}ms (${(1000 / parsed).toFixed(2)} req/sec)`);
+    return currentLastFmThrottleMs;
+  }
+  return currentLastFmThrottleMs;
+}
+
+// Throttle helper: guarantees minimum delay between Last.fm API requests
+async function throttleLastFm(customThrottleMs = null, abortSignal = null) {
+  const delay = typeof customThrottleMs === 'number' && customThrottleMs >= 0
+    ? customThrottleMs
+    : currentLastFmThrottleMs;
+
+  if (delay <= 0) return;
+
+  const now = Date.now();
+  const elapsed = now - lastFmLastRequestTime;
+  if (elapsed < delay) {
+    const wait = delay - elapsed;
+    logger.debug('LastFM', `Throttling: waiting ${wait}ms before next request (delay: ${delay}ms)`);
+    if (abortSignal) {
+      await new Promise((resolve, reject) => {
+        if (abortSignal.aborted) return reject(new Error('Download aborted by user'));
+        const timer = setTimeout(resolve, wait);
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(new Error('Download aborted by user'));
+        };
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      });
+    } else {
+      await sleep(wait);
+    }
+  }
+  lastFmLastRequestTime = Date.now();
+}
+
+// Extract detailed network error diagnosis from error chain
+function extractNetworkErrorDetails(err) {
+  const codes = [];
+  const messages = [];
+  let curr = err;
+  let depth = 0;
+
+  while (curr && depth < 5) {
+    if (curr.code && !codes.includes(curr.code)) codes.push(curr.code);
+    if (curr.name && curr.name !== 'TypeError' && curr.name !== 'Error' && !codes.includes(curr.name)) {
+      codes.push(curr.name);
+    }
+    if (curr.syscall && !codes.includes(`syscall:${curr.syscall}`)) {
+      codes.push(`syscall:${curr.syscall}`);
+    }
+    if (curr.message && curr.message !== 'fetch failed' && !messages.includes(curr.message)) {
+      messages.push(curr.message);
+    }
+    curr = curr.cause;
+    depth++;
+  }
+
+  const codeStr = codes.join(' / ');
+  const rawMsg = messages.join('; ') || err.message;
+  const lower = `${codeStr} ${rawMsg}`.toLowerCase();
+
+  let friendlyCategory = 'Network Connection Error';
+  let friendlyDescription = rawMsg;
+
+  if (lower.includes('etimedout') || lower.includes('und_err_connect_timeout') || lower.includes('time out') || lower.includes('timeout')) {
+    friendlyCategory = 'Connection Timeout';
+    friendlyDescription = 'Last.fm took too long to connect or respond. This usually indicates high Last.fm server load or packet loss.';
+  } else if (lower.includes('econnreset') || lower.includes('socket hung up')) {
+    friendlyCategory = 'Connection Reset';
+    friendlyDescription = 'The connection was abruptly terminated or reset by the Last.fm server.';
+  } else if (lower.includes('econnrefused')) {
+    friendlyCategory = 'Connection Refused';
+    friendlyDescription = 'The Last.fm server refused the connection.';
+  } else if (lower.includes('enotfound') || lower.includes('eai_again')) {
+    friendlyCategory = 'DNS Lookup Failed';
+    friendlyDescription = 'Could not resolve ws.audioscrobbler.com. Please verify your internet connection and DNS.';
+  } else if (lower.includes('aborterror') || lower.includes('aborted')) {
+    friendlyCategory = 'Request Aborted';
+    friendlyDescription = 'The request was aborted or cancelled.';
+  } else if (lower.includes('cert_') || lower.includes('ssl') || lower.includes('tls')) {
+    friendlyCategory = 'SSL/TLS Handshake Error';
+    friendlyDescription = 'Failed to establish secure TLS/SSL connection with Last.fm.';
+  }
+
+  return {
+    category: friendlyCategory,
+    code: codeStr || (err.name !== 'TypeError' ? err.name : 'NETWORK_ERROR'),
+    description: friendlyDescription,
+    rawMessage: rawMsg,
+    summary: `${friendlyCategory}: ${friendlyDescription}${codeStr ? ` [Code: ${codeStr}]` : ''}`
+  };
+}
+
+// Fetch single page from Last.fm with throttling, timeout, and robust network error logging
+async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
+  const {
+    throttleMs = currentLastFmThrottleMs,
+    abortSignal = null,
+    maxRetries = 3,
+    onRetry = null,
+  } = options;
+
   if (!API_KEY || API_KEY === 'YOUR_LASTFM_API_KEY_HERE') {
     logger.error('LastFM', 'API key missing or unconfigured in .env');
     throw new Error('Missing or unconfigured LASTFM_API_KEY in .env file');
   }
 
   const url = `${BASE_URL}?method=user.getRecentTracks&user=${encodeURIComponent(username)}&api_key=${API_KEY}&format=json&page=${page}&limit=${limit}`;
-  const startTime = Date.now();
-  logger.debug('LastFM', `Fetching page ${page} (limit ${limit}) for user "${username}"`);
 
-  let res;
-  try {
-    res = await fetch(url);
-  } catch (err) {
-    logger.error('LastFM', `Network error fetching page ${page} for "${username}": ${err.message}`, err);
-    throw new Error(`Network error calling Last.fm: ${err.message}`);
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    if (abortSignal && abortSignal.aborted) {
+      throw new Error('Download aborted by user');
+    }
+
+    // Apply throttling delay before calling Last.fm
+    await throttleLastFm(throttleMs, abortSignal);
+
+    const startTime = Date.now();
+    logger.debug('LastFM', `[${username}] Fetching page ${page} (limit ${limit}, throttle ${throttleMs}ms, attempt ${attempt + 1})`);
+
+    let res;
+    let requestError = null;
+
+    try {
+      // 30-second request timeout combined with job abortSignal
+      const requestTimeoutSignal = AbortSignal.timeout ? AbortSignal.timeout(30000) : null;
+      let effectiveSignal = abortSignal;
+      if (abortSignal && requestTimeoutSignal && AbortSignal.any) {
+        effectiveSignal = AbortSignal.any([abortSignal, requestTimeoutSignal]);
+      } else if (!abortSignal && requestTimeoutSignal) {
+        effectiveSignal = requestTimeoutSignal;
+      }
+
+      res = await fetch(url, { signal: effectiveSignal });
+    } catch (err) {
+      requestError = err;
+    }
+
+    const duration = Date.now() - startTime;
+
+    // Handle network-level errors (DNS, timeout, connection reset, socket drops)
+    if (requestError) {
+      if (abortSignal && abortSignal.aborted) {
+        throw new Error('Download aborted by user');
+      }
+
+      const errorInfo = extractNetworkErrorDetails(requestError);
+      const isRetryable = attempt < maxRetries;
+
+      logger.error('LastFM', `[${username}] Network error on page ${page} (attempt ${attempt + 1}/${maxRetries + 1}, ${duration}ms): ${errorInfo.summary}`, {
+        page,
+        durationMs: duration,
+        code: errorInfo.code,
+        category: errorInfo.category,
+        cause: requestError.cause?.message || requestError.message,
+      });
+
+      if (isRetryable) {
+        attempt++;
+        const backoffMs = Math.min(10000, 1500 * Math.pow(1.5, attempt));
+        logger.warn('LastFM', `[${username}] Retrying page ${page} in ${(backoffMs / 1000).toFixed(1)}s (attempt ${attempt}/${maxRetries})...`);
+        if (typeof onRetry === 'function') {
+          onRetry({
+            page,
+            attempt,
+            maxRetries,
+            backoffMs,
+            error: errorInfo.summary,
+            category: errorInfo.category,
+            code: errorInfo.code
+          });
+        }
+        await sleep(backoffMs);
+        continue;
+      }
+
+      const finalError = new Error(`Network error calling Last.fm on page ${page}: ${errorInfo.summary}`);
+      finalError.code = errorInfo.code;
+      finalError.category = errorInfo.category;
+      finalError.description = errorInfo.description;
+      finalError.page = page;
+      finalError.isNetworkError = true;
+      throw finalError;
+    }
+
+    // Inspect HTTP response safely
+    let bodyText = '';
+    let data = null;
+    try {
+      bodyText = await res.text();
+      if (bodyText.trim().startsWith('{')) {
+        data = JSON.parse(bodyText);
+      }
+    } catch (parseErr) {
+      logger.warn('LastFM', `[${username}] Non-JSON response received on page ${page} (HTTP ${res.status}): ${parseErr.message}`);
+    }
+
+    if (!res.ok) {
+      const isTransientHttp = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+      const apiMsg = data?.message || '';
+      const snippet = apiMsg || (bodyText.length > 200 ? `${bodyText.slice(0, 200).replace(/\s+/g, ' ')}...` : bodyText.replace(/\s+/g, ' '));
+      const httpErrorSummary = `HTTP ${res.status} ${res.statusText || ''}${snippet ? ` - ${snippet}` : ''}`;
+
+      logger.error('LastFM', `[${username}] HTTP error on page ${page} (${duration}ms): ${httpErrorSummary}`, {
+        status: res.status,
+        statusText: res.statusText,
+        page,
+        durationMs: duration,
+      });
+
+      if (isTransientHttp && attempt < maxRetries) {
+        attempt++;
+        const retryAfter = parseInt(res.headers.get('retry-after') || '2', 10);
+        const backoffMs = Math.max(retryAfter * 1000, 2000 * attempt);
+        logger.warn('LastFM', `[${username}] Transient HTTP ${res.status} on page ${page}. Waiting ${(backoffMs / 1000).toFixed(1)}s before retry ${attempt}/${maxRetries}...`);
+        if (typeof onRetry === 'function') {
+          onRetry({
+            page,
+            attempt,
+            maxRetries,
+            backoffMs,
+            error: httpErrorSummary,
+            category: `HTTP ${res.status}`,
+            code: `HTTP_${res.status}`
+          });
+        }
+        await sleep(backoffMs);
+        continue;
+      }
+
+      const httpErr = new Error(`Last.fm returned ${httpErrorSummary}`);
+      httpErr.status = res.status;
+      httpErr.code = `HTTP_${res.status}`;
+      httpErr.category = res.status === 429 ? 'Rate Limited' : `HTTP Server Error (${res.status})`;
+      httpErr.page = page;
+      httpErr.isHttpError = true;
+      httpErr.description = isTransientHttp
+        ? `Last.fm service temporarily unavailable or rate limited (HTTP ${res.status}).`
+        : `Last.fm request failed with HTTP ${res.status}.`;
+      throw httpErr;
+    }
+
+    // Last.fm API-level errors (HTTP 200 with JSON error payload)
+    if (data && data.error) {
+      logger.error('LastFM', `[${username}] API Error [Code ${data.error}] on page ${page}: ${data.message}`, {
+        errorCode: data.error,
+        errorMessage: data.message,
+        page,
+      });
+      const apiErr = new Error(`Last.fm API Error: ${data.message} (code ${data.error})`);
+      apiErr.code = `LASTFM_API_${data.error}`;
+      apiErr.category = 'Last.fm API Error';
+      apiErr.page = page;
+      apiErr.isApiError = true;
+      apiErr.description = data.message;
+      throw apiErr;
+    }
+
+    if (!data || !data.recenttracks) {
+      const err = new Error(`Invalid response structure from Last.fm on page ${page}`);
+      err.code = 'INVALID_RESPONSE';
+      err.category = 'Response Format Error';
+      err.page = page;
+      err.description = 'Last.fm returned unexpected response data.';
+      throw err;
+    }
+
+    logger.debug('LastFM', `[${username}] Page ${page} received in ${duration}ms (${data.recenttracks.track?.length || 0} items)`);
+    return data.recenttracks;
   }
-
-  const duration = Date.now() - startTime;
-  if (!res.ok) {
-    logger.warn('LastFM', `Last.fm returned HTTP ${res.status} (${duration}ms) for page ${page}`);
-  }
-
-  const data = await res.json();
-  if (data.error) {
-    logger.error('LastFM', `API error for user "${username}" on page ${page}: [Code ${data.error}] ${data.message}`);
-    throw new Error(data.message);
-  }
-
-  logger.debug('LastFM', `Received page ${page} in ${duration}ms`);
-  return data.recenttracks;
 }
 
 // Helper to normalize tracks array from Last.fm API response
@@ -211,8 +472,8 @@ function extractTracks(recenttracks) {
   return raw.filter(t => t && t.date && t.date.uts);
 }
 
-// --- Download Job Runner with Incremental Writes and Resume Support ---
-async function runDownloadJob(username, { restart = false } = {}) {
+// --- Download Job Runner with Incremental Writes, Resume Support, and Throttling ---
+async function runDownloadJob(username, { restart = false, throttleMs = null } = {}) {
   const key = username.toLowerCase().trim();
 
   if (activeDownloads.has(key)) {
@@ -220,10 +481,15 @@ async function runDownloadJob(username, { restart = false } = {}) {
     return { alreadyRunning: true };
   }
 
+  const effectiveThrottle = typeof throttleMs === 'number' && throttleMs >= 100
+    ? throttleMs
+    : currentLastFmThrottleMs;
+
   const abortController = new AbortController();
   const jobState = {
     abortController,
     aborted: false,
+    throttleMs: effectiveThrottle,
     progress: null,
   };
   activeDownloads.set(key, jobState);
@@ -248,14 +514,38 @@ async function runDownloadJob(username, { restart = false } = {}) {
         startPage = existingProgress.lastPageFetched + 1;
         totalPages = existingProgress.totalPages || 1;
         totalTracks = existingProgress.totalTracks || 0;
-        logger.info('DownloadJob', `[${key}] Resuming download from page ${startPage} of ${totalPages} (${localScrobbles.length} tracks already saved)`);
+        logger.info('DownloadJob', `[${key}] Resuming download from page ${startPage} of ${totalPages} (${localScrobbles.length} tracks already saved, throttle: ${jobState.throttleMs}ms)`);
       } else {
-        logger.info('DownloadJob', `[${key}] Starting fresh download from page 1`);
+        logger.info('DownloadJob', `[${key}] Starting fresh download from page 1 (throttle: ${jobState.throttleMs}ms)`);
       }
+
+      // Helper for retry callbacks
+      const createRetryHandler = () => (retryInfo) => {
+        logger.warn('DownloadJob', `[${key}] Retry ${retryInfo.attempt}/${retryInfo.maxRetries} for page ${retryInfo.page}: ${retryInfo.error}`);
+        const retryProgress = {
+          ...(jobState.progress || {}),
+          username: key,
+          currentPage: retryInfo.page,
+          isRetrying: true,
+          retryAttempt: retryInfo.attempt,
+          retryMax: retryInfo.maxRetries,
+          retryError: retryInfo.error,
+          retryWaitSeconds: Math.round(retryInfo.backoffMs / 1000),
+          throttleMs: jobState.throttleMs,
+          message: `Network glitch on page ${retryInfo.page}. Retrying attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}...`,
+          updatedAt: new Date().toISOString()
+        };
+        jobState.progress = retryProgress;
+        broadcastDownloadEvent(key, 'progress', retryProgress);
+      };
 
       // If starting fresh or starting at page 1, fetch page 1 to establish totalPages and totalTracks
       if (startPage === 1) {
-        const initialData = await fetchLastFmPage(key, 1, 200);
+        const initialData = await fetchLastFmPage(key, 1, 200, {
+          throttleMs: jobState.throttleMs,
+          abortSignal: jobState.abortController.signal,
+          onRetry: createRetryHandler()
+        });
         totalPages = parseInt(initialData?.['@attr']?.totalPages || '1', 10);
         totalTracks = parseInt(initialData?.['@attr']?.total || '0', 10);
 
@@ -273,6 +563,7 @@ async function runDownloadJob(username, { restart = false } = {}) {
           totalTracks,
           savedTracksCount: localScrobbles.length,
           percent: isComplete ? 100 : Math.min(100, Math.round((1 / totalPages) * 100)),
+          throttleMs: jobState.throttleMs,
           message: isComplete
             ? `Download completed: ${localScrobbles.length} scrobbles saved`
             : `Downloaded page 1 of ${totalPages} (${localScrobbles.length} tracks saved)`,
@@ -303,6 +594,7 @@ async function runDownloadJob(username, { restart = false } = {}) {
           totalTracks,
           savedTracksCount: localScrobbles.length,
           percent: 100,
+          throttleMs: jobState.throttleMs,
           message: `All ${totalPages} pages already downloaded (${localScrobbles.length} tracks saved)`,
           updatedAt: new Date().toISOString(),
         };
@@ -327,6 +619,7 @@ async function runDownloadJob(username, { restart = false } = {}) {
             totalTracks,
             savedTracksCount: localScrobbles.length,
             percent: Math.min(100, Math.round((pausedPage / totalPages) * 100)),
+            throttleMs: jobState.throttleMs,
             message: `Download paused at page ${pausedPage} of ${totalPages} (${localScrobbles.length} tracks saved)`,
             updatedAt: new Date().toISOString(),
           };
@@ -337,7 +630,11 @@ async function runDownloadJob(username, { restart = false } = {}) {
           return;
         }
 
-        const pageData = await fetchLastFmPage(key, page, 200);
+        const pageData = await fetchLastFmPage(key, page, 200, {
+          throttleMs: jobState.throttleMs,
+          abortSignal: jobState.abortController.signal,
+          onRetry: createRetryHandler()
+        });
 
         if (pageData?.['@attr']?.totalPages) {
           totalPages = parseInt(pageData['@attr'].totalPages, 10);
@@ -364,6 +661,7 @@ async function runDownloadJob(username, { restart = false } = {}) {
           totalTracks,
           savedTracksCount: localScrobbles.length,
           percent,
+          throttleMs: jobState.throttleMs,
           message: isComplete
             ? `Download completed: ${localScrobbles.length} scrobbles saved!`
             : `Downloaded page ${page} of ${totalPages} (${localScrobbles.length} tracks saved)`,
@@ -376,27 +674,31 @@ async function runDownloadJob(username, { restart = false } = {}) {
         broadcastDownloadEvent(key, isComplete ? 'complete' : 'progress', progress);
 
         if (page % 5 === 0 || isComplete) {
-          logger.info('DownloadJob', `[${key}] Page ${page}/${totalPages} (${percent}%) - ${localScrobbles.length} tracks on disk`);
-        }
-
-        if (!isComplete) {
-          await new Promise(r => setTimeout(r, 200)); // Rate limit buffer
+          logger.info('DownloadJob', `[${key}] Page ${page}/${totalPages} (${percent}%) - ${localScrobbles.length} tracks on disk (throttle: ${jobState.throttleMs}ms)`);
         }
       }
 
       logger.info('DownloadJob', `[${key}] Full download finished. Total saved: ${localScrobbles.length}`);
       activeDownloads.delete(key);
     } catch (err) {
-      logger.error('DownloadJob', `[${key}] Failed during download: ${err.message}`, err);
+      const failedPage = err.page || jobState.progress?.currentPage || 1;
+      logger.error('DownloadJob', `[${key}] Failed during download at page ${failedPage}: ${err.message}`, err);
+
       const currentProgress = jobState.progress || {};
       const errorProgress = {
         ...currentProgress,
         username: key,
         status: 'error',
+        failedPage,
         error: err.message,
-        message: `Download error: ${err.message}. You can resume download where it stopped.`,
+        errorCategory: err.category || (err.isHttpError ? 'HTTP Error' : 'Network Error'),
+        errorCode: err.code || 'NETWORK_ERROR',
+        errorDescription: err.description || err.message,
+        throttleMs: jobState.throttleMs,
+        message: `Download stopped on page ${failedPage}: ${err.description || err.message}. You can resume download where it stopped.`,
         updatedAt: new Date().toISOString(),
       };
+      jobState.progress = errorProgress;
       await saveDownloadProgress(key, errorProgress);
       broadcastDownloadEvent(key, 'error', errorProgress);
       activeDownloads.delete(key);
@@ -475,9 +777,38 @@ app.get('/api/scrobbles/download-stream', async (req, res) => {
   });
 });
 
+// API: Get or Set Last.fm throttle speed
+app.get('/api/scrobbles/throttle', (req, res) => {
+  res.json({
+    throttleMs: currentLastFmThrottleMs,
+    reqPerSec: (1000 / currentLastFmThrottleMs).toFixed(2),
+  });
+});
+
+app.post('/api/scrobbles/throttle', (req, res) => {
+  const { throttleMs } = req.body;
+  const parsed = parseInt(throttleMs, 10);
+  if (isNaN(parsed) || parsed < 100) {
+    return res.status(400).json({ error: 'throttleMs must be a positive integer >= 100 (ms)' });
+  }
+
+  const updated = setThrottleMs(parsed);
+  // Dynamically update active jobs
+  for (const [userKey, job] of activeDownloads.entries()) {
+    job.throttleMs = updated;
+    logger.info('DownloadJob', `[${userKey}] Dynamically adjusted active download throttle to ${updated}ms`);
+  }
+
+  res.json({
+    message: `Throttle speed set to ${updated}ms (${(1000 / updated).toFixed(2)} req/sec)`,
+    throttleMs: updated,
+    reqPerSec: (1000 / updated).toFixed(2),
+  });
+});
+
 // API: Download ALL scrobbles (supports resume or restart)
 app.post('/api/scrobbles/download-all', async (req, res) => {
-  const { username, restart = false } = req.body;
+  const { username, restart = false, throttleMs } = req.body;
   if (!username) {
     logger.warn('DownloadAll', 'Rejected request: missing username');
     return res.status(400).json({ error: 'Username is required' });
@@ -495,13 +826,22 @@ app.post('/api/scrobbles/download-all', async (req, res) => {
     });
   }
 
+  let jobThrottle = currentLastFmThrottleMs;
+  if (throttleMs) {
+    const parsedThrottle = parseInt(throttleMs, 10);
+    if (!isNaN(parsedThrottle) && parsedThrottle >= 100) {
+      jobThrottle = parsedThrottle;
+      setThrottleMs(parsedThrottle);
+    }
+  }
+
   const existingProgress = restart ? null : await loadDownloadProgress(key);
   const isResuming = !restart &&
     existingProgress &&
     existingProgress.status !== 'completed' &&
     existingProgress.lastPageFetched > 0;
 
-  await runDownloadJob(trimmedUsername, { restart: !!restart });
+  await runDownloadJob(trimmedUsername, { restart: !!restart, throttleMs: jobThrottle });
 
   res.json({
     message: isResuming
@@ -509,6 +849,7 @@ app.post('/api/scrobbles/download-all', async (req, res) => {
       : 'Download started',
     started: true,
     resuming: isResuming,
+    throttleMs: jobThrottle,
   });
 });
 
@@ -534,14 +875,18 @@ app.post('/api/scrobbles/download-cancel', async (req, res) => {
 
 // API: Sync NEWER scrobbles
 app.post('/api/scrobbles/sync', async (req, res, next) => {
-  const { username } = req.body;
+  const { username, throttleMs } = req.body;
   if (!username) {
     logger.warn('Sync', 'Rejected request: missing username');
     return res.status(400).json({ error: 'Username is required' });
   }
 
   const trimmedUsername = username.trim();
-  logger.info('Sync', `Starting sync for user: "${trimmedUsername}"`);
+  const syncThrottle = (throttleMs && parseInt(throttleMs, 10) >= 100)
+    ? parseInt(throttleMs, 10)
+    : currentLastFmThrottleMs;
+
+  logger.info('Sync', `Starting sync for user: "${trimmedUsername}" (throttle: ${syncThrottle}ms)`);
 
   try {
     const local = await loadScrobbles(trimmedUsername);
@@ -559,7 +904,9 @@ app.post('/api/scrobbles/sync', async (req, res, next) => {
 
     while (!done) {
       logger.debug('Sync', `[${trimmedUsername}] Fetching page ${page} to check for newer scrobbles`);
-      const pageData = await fetchLastFmPage(trimmedUsername, page, 200);
+      const pageData = await fetchLastFmPage(trimmedUsername, page, 200, {
+        throttleMs: syncThrottle
+      });
       const pageTracks = extractTracks(pageData);
 
       if (pageTracks.length === 0) {
@@ -583,7 +930,6 @@ app.post('/api/scrobbles/sync', async (req, res, next) => {
       }
 
       page++;
-      await new Promise(r => setTimeout(r, 200));
     }
 
     logger.info('Sync', `[${trimmedUsername}] Sync complete. Found ${newTracks.length} new scrobbles.`);
@@ -591,7 +937,12 @@ app.post('/api/scrobbles/sync', async (req, res, next) => {
     res.json({ message: 'Sync complete', added: newTracks.length, total: updated.length });
   } catch (err) {
     logger.error('Sync', `Sync failed for "${trimmedUsername}": ${err.message}`, err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+      errorCode: err.code || 'SYNC_ERROR',
+      errorCategory: err.category || 'Network Error',
+      description: err.description || err.message,
+    });
   }
 });
 

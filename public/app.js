@@ -1,10 +1,152 @@
 let currentEventSource = null;
 let statusCheckTimeout = null;
+let selectedThrottleMs = 1000;
+let activityLogCount = 0;
 
 const setStatus = (msg) => {
   const el = document.getElementById('status');
   if (el) el.innerText = msg;
 };
+
+// Activity Log Helper
+function addActivityLog(message, type = 'info') {
+  const logEl = document.getElementById('activityLog');
+  const countEl = document.getElementById('logCounter');
+  if (!logEl) return;
+
+  const timeStr = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.className = `log-line log-line-${type}`;
+  line.innerText = `[${timeStr}] ${message}`;
+
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+
+  activityLogCount++;
+  if (countEl) countEl.innerText = `${activityLogCount} events`;
+}
+
+function clearActivityLog() {
+  const logEl = document.getElementById('activityLog');
+  const countEl = document.getElementById('logCounter');
+  if (logEl) logEl.innerHTML = '';
+  activityLogCount = 0;
+  if (countEl) countEl.innerText = '0 events';
+}
+
+// Throttle Controls Management
+function getSelectedThrottleMs() {
+  return selectedThrottleMs || 1000;
+}
+
+function updateThrottleUI(ms) {
+  selectedThrottleMs = ms;
+  const selectEl = document.getElementById('throttleSelect');
+  const badgeEl = document.getElementById('throttleBadge');
+  const customWrap = document.getElementById('customThrottleWrap');
+  const customInput = document.getElementById('customThrottleInput');
+  const progressThrottle = document.getElementById('progressThrottle');
+
+  const formattedSec = (ms / 1000).toFixed(1);
+  const reqPerSec = (1000 / ms).toFixed(1);
+  const badgeText = `${formattedSec}s / req (${reqPerSec} req/s)`;
+
+  if (badgeEl) badgeEl.innerText = badgeText;
+  if (progressThrottle) progressThrottle.innerText = `⏱️ ${formattedSec}s delay`;
+
+  if (selectEl) {
+    const knownValues = ['200', '500', '1000', '1500', '2000'];
+    if (knownValues.includes(String(ms))) {
+      selectEl.value = String(ms);
+      if (customWrap) customWrap.style.display = 'none';
+    } else {
+      selectEl.value = 'custom';
+      if (customWrap) customWrap.style.display = 'inline-flex';
+      if (customInput) customInput.value = ms;
+    }
+  }
+}
+
+async function updateThrottleServer(ms) {
+  updateThrottleUI(ms);
+  localStorage.setItem('lastfm_throttle_ms', String(ms));
+  try {
+    const res = await fetch('/api/scrobbles/throttle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ throttleMs: ms })
+    });
+    const data = await res.json();
+    addActivityLog(`⏱️ Throttle updated to ${ms}ms (${(1000 / ms).toFixed(2)} req/sec)`, 'info');
+  } catch (err) {
+    console.warn('Could not update throttle on server:', err.message);
+  }
+}
+
+function handleThrottleSelectChange(val) {
+  const customWrap = document.getElementById('customThrottleWrap');
+  if (val === 'custom') {
+    if (customWrap) customWrap.style.display = 'inline-flex';
+    const customInput = document.getElementById('customThrottleInput');
+    if (customInput && !customInput.value) customInput.value = selectedThrottleMs;
+  } else {
+    if (customWrap) customWrap.style.display = 'none';
+    const ms = parseInt(val, 10);
+    if (!isNaN(ms) && ms >= 100) {
+      updateThrottleServer(ms);
+    }
+  }
+}
+
+function applyCustomThrottle() {
+  const customInput = document.getElementById('customThrottleInput');
+  if (!customInput) return;
+  const ms = parseInt(customInput.value, 10);
+  if (isNaN(ms) || ms < 100) {
+    alert('Please enter a valid throttle duration in milliseconds (at least 100ms).');
+    return;
+  }
+  updateThrottleServer(ms);
+}
+
+// Network / Download Error Alert Display
+function showDownloadError(errorData) {
+  const alertBox = document.getElementById('downloadErrorAlert');
+  const alertTitle = document.getElementById('errorAlertTitle');
+  const alertBody = document.getElementById('errorAlertBody');
+  const pagePill = document.getElementById('errorPagePill');
+  const codePill = document.getElementById('errorCodePill');
+  const timePill = document.getElementById('errorTimePill');
+  const btnResume = document.getElementById('btnErrorResume');
+
+  if (!alertBox) return;
+
+  const title = errorData.errorCategory || 'Last.fm Download Error';
+  const desc = errorData.errorDescription || errorData.error || errorData.message || 'An error occurred during Last.fm communication.';
+  const failedPage = errorData.failedPage || errorData.currentPage || errorData.lastPageFetched || '--';
+  const code = errorData.errorCode || errorData.code || 'NETWORK_ERROR';
+  const timeStr = errorData.updatedAt
+    ? new Date(errorData.updatedAt).toLocaleTimeString()
+    : new Date().toLocaleTimeString();
+
+  if (alertTitle) alertTitle.innerText = `⚠️ ${title}`;
+  if (alertBody) alertBody.innerText = desc;
+  if (pagePill) pagePill.innerText = `Failed Page: ${failedPage}`;
+  if (codePill) codePill.innerText = `Code: ${code}`;
+  if (timePill) timePill.innerText = `Time: ${timeStr}`;
+
+  if (btnResume) {
+    btnResume.innerText = `🔄 Resume Download (Page ${failedPage})`;
+    btnResume.onclick = () => downloadAll({ resume: true });
+  }
+
+  alertBox.style.display = 'flex';
+}
+
+function dismissDownloadError() {
+  const alertBox = document.getElementById('downloadErrorAlert');
+  if (alertBox) alertBox.style.display = 'none';
+}
 
 function setButtonsBusy(isBusy) {
   const btnFetch = document.getElementById('btnFetch');
@@ -45,6 +187,15 @@ async function checkUserStatus(username, silent = false) {
       return;
     }
 
+    // Check if previous download ended in an error
+    if (data.progress && data.progress.status === 'error') {
+      showDownloadError(data.progress);
+      if (resumeBanner) resumeBanner.style.display = 'none';
+      if (btnDownload) btnDownload.innerText = 'Resume Download';
+      if (btnRestart) btnRestart.style.display = 'inline-block';
+      return;
+    }
+
     if (data.canResume) {
       if (resumeBanner) resumeBanner.style.display = 'flex';
       if (resumeText) {
@@ -78,6 +229,7 @@ function connectProgressStream(username) {
   const progressBadge = document.getElementById('progressBadge');
   const progressBarFill = document.getElementById('progressBarFill');
   const progressDetails = document.getElementById('progressDetails');
+  const progressThrottle = document.getElementById('progressThrottle');
 
   if (progressBox) progressBox.style.display = 'block';
 
@@ -88,7 +240,30 @@ function connectProgressStream(username) {
     const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
     const percent = Math.min(100, Math.max(0, data.percent || 0));
 
-    if (progressBadge) progressBadge.innerText = `${percent}%`;
+    if (data.throttleMs) {
+      updateThrottleUI(data.throttleMs);
+    }
+
+    // Handle retry state during transient network error
+    if (data.isRetrying) {
+      if (progressBadge) {
+        progressBadge.innerText = `⚠️ Retry ${data.retryAttempt}/${data.retryMax}`;
+        progressBadge.style.background = '#d97706';
+      }
+      if (progressTitle) {
+        progressTitle.innerText = `Network glitch on page ${data.currentPage || '?'}: ${data.retryError || 'Retrying...'}`;
+      }
+      if (progressDetails) {
+        progressDetails.innerText = `Waiting ${data.retryWaitSeconds || 2}s before retry attempt ${data.retryAttempt} of ${data.retryMax}...`;
+      }
+      addActivityLog(`⚠️ Retrying page ${data.currentPage} (${data.retryAttempt}/${data.retryMax}): ${data.retryError || 'Network timeout/drop'}`, 'warn');
+      return;
+    }
+
+    if (progressBadge) {
+      progressBadge.innerText = `${percent}%`;
+      progressBadge.style.background = '#e5151f';
+    }
     if (progressBarFill) progressBarFill.style.width = `${percent}%`;
     if (progressTitle) progressTitle.innerText = data.message || `Downloading page ${data.currentPage || 1} of ${data.totalPages || 1}`;
 
@@ -97,10 +272,19 @@ function connectProgressStream(username) {
       progressDetails.innerText = `Page ${data.currentPage || data.lastPageFetched || 0} of ${data.totalPages || 0} • ${tracksSaved} tracks saved to disk`;
     }
 
+    if (progressThrottle && data.throttleMs) {
+      progressThrottle.innerText = `⏱️ ${(data.throttleMs / 1000).toFixed(1)}s delay`;
+    }
+
     // Live update total scrobbles stat card while downloading
     const stTotal = document.getElementById('stTotal');
     if (stTotal && data.savedTracksCount) {
       stTotal.innerText = tracksSaved;
+    }
+
+    const curPage = data.currentPage || data.lastPageFetched || 0;
+    if (curPage % 5 === 0 || curPage === 1 || percent === 100) {
+      addActivityLog(`Page ${curPage}/${data.totalPages || 1} (${percent}%) - ${tracksSaved} tracks saved (throttle: ${data.throttleMs || selectedThrottleMs}ms)`, 'info');
     }
   };
 
@@ -111,7 +295,9 @@ function connectProgressStream(username) {
   es.addEventListener('complete', (e) => {
     const data = JSON.parse(e.data);
     handleUpdate(data);
+    dismissDownloadError();
     setStatus(`Download completed! Total scrobbles saved: ${data.savedTracksCount}`);
+    addActivityLog(`✅ Download completed! Total scrobbles saved: ${data.savedTracksCount.toLocaleString()}`, 'info');
     setButtonsBusy(false);
 
     const resumeBanner = document.getElementById('resumeBanner');
@@ -134,6 +320,7 @@ function connectProgressStream(username) {
     const data = JSON.parse(e.data);
     handleUpdate(data);
     setStatus(data.message || 'Download paused.');
+    addActivityLog(`⏸️ Download paused at page ${data.currentPage || data.lastPageFetched}`, 'warn');
     setButtonsBusy(false);
     es.close();
     currentEventSource = null;
@@ -141,12 +328,24 @@ function connectProgressStream(username) {
   });
 
   es.addEventListener('error', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      setStatus(`Download error: ${data.error || data.message}`);
-    } catch {
-      setStatus('Disconnected from download stream or error occurred.');
+    let errorHandled = false;
+    if (e.data) {
+      try {
+        const data = JSON.parse(e.data);
+        showDownloadError(data);
+        setStatus(`Download stopped: ${data.error || data.message}`);
+        addActivityLog(`❌ Error on page ${data.failedPage || '?'}: ${data.errorDescription || data.error}`, 'error');
+        errorHandled = true;
+      } catch (err) {
+        // Fall through
+      }
     }
+
+    if (!errorHandled) {
+      setStatus('Disconnected from download stream or error occurred.');
+      addActivityLog('⚠️ EventSource stream closed or network interrupted.', 'warn');
+    }
+
     setButtonsBusy(false);
     es.close();
     currentEventSource = null;
@@ -194,8 +393,12 @@ async function downloadAll(options = {}) {
   const username = document.getElementById('username').value.trim();
   if (!username) return alert('Please enter a username');
 
+  dismissDownloadError();
   const restart = !!options.restart;
+  const throttleMs = getSelectedThrottleMs();
+
   setStatus(restart ? 'Starting full download from page 1...' : 'Starting download...');
+  addActivityLog(`🚀 Starting download for "${username}" (throttle: ${throttleMs}ms, ${restart ? 'restart from page 1' : 'resuming if partial'})...`, 'info');
 
   setButtonsBusy(true);
 
@@ -206,7 +409,7 @@ async function downloadAll(options = {}) {
     const res = await fetch('/api/scrobbles/download-all', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, restart })
+      body: JSON.stringify({ username, restart, throttleMs })
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -214,7 +417,13 @@ async function downloadAll(options = {}) {
     setStatus(data.message || 'Download in progress...');
     connectProgressStream(username);
   } catch (err) {
+    showDownloadError({
+      errorCategory: 'Download Initiation Error',
+      errorDescription: err.message,
+      errorCode: 'INIT_ERROR'
+    });
     setStatus('Error starting download: ' + err.message);
+    addActivityLog(`❌ Error starting download: ${err.message}`, 'error');
     setButtonsBusy(false);
   }
 }
@@ -233,6 +442,7 @@ async function pauseDownload() {
   if (!username) return;
 
   setStatus('Requesting pause...');
+  addActivityLog('⏸️ Pausing download...', 'info');
   try {
     const res = await fetch('/api/scrobbles/download-cancel', {
       method: 'POST',
@@ -250,24 +460,38 @@ async function syncNewer() {
   const username = document.getElementById('username').value.trim();
   if (!username) return alert('Please enter a username');
 
+  dismissDownloadError();
+  const throttleMs = getSelectedThrottleMs();
+
   setStatus('Checking for newer scrobbles...');
+  addActivityLog(`🔄 Checking for newer scrobbles (throttle: ${throttleMs}ms)...`, 'info');
   setButtonsBusy(true);
   try {
     const res = await fetch('/api/scrobbles/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username })
+      body: JSON.stringify({ username, throttleMs })
     });
     const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    if (data.error) {
+      showDownloadError({
+        errorCategory: data.errorCategory || 'Sync Error',
+        errorDescription: data.description || data.error,
+        errorCode: data.errorCode || 'SYNC_ERROR'
+      });
+      throw new Error(data.error);
+    }
 
     setStatus(`Sync complete! Added ${data.added} new scrobbles.`);
+    addActivityLog(`✅ Sync complete! Added ${data.added} new scrobbles (total: ${data.total}).`, 'info');
     fetchLocalData(true);
   } catch (err) {
     setStatus('Error during sync: ' + err.message);
+    addActivityLog(`❌ Error during sync: ${err.message}`, 'error');
   } finally {
     setButtonsBusy(false);
   }
+}
 }
 
 // Auto-check status when username changes
@@ -739,4 +963,40 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+// Initial initialization on page load
+document.addEventListener('DOMContentLoaded', async () => {
+  // Restore saved throttle preference or fetch from server
+  const savedThrottle = localStorage.getItem('lastfm_throttle_ms');
+  if (savedThrottle) {
+    const parsed = parseInt(savedThrottle, 10);
+    if (!isNaN(parsed) && parsed >= 100) {
+      updateThrottleUI(parsed);
+      updateThrottleServer(parsed);
+    }
+  } else {
+    try {
+      const res = await fetch('/api/scrobbles/throttle');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.throttleMs) {
+          updateThrottleUI(data.throttleMs);
+        }
+      }
+    } catch (err) {
+      console.debug('Using default 1000ms throttle');
+    }
+  }
+
+  // Handle enter key on custom throttle input
+  const customInput = document.getElementById('customThrottleInput');
+  if (customInput) {
+    customInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applyCustomThrottle();
+      }
+    });
+  }
+});
 
