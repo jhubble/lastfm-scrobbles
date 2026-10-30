@@ -18,7 +18,17 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- Logging Helper ---
+// --- Configuration ---------------------------------------------------------
+const REQUEST_TIMEOUT_MS = parseInt(process.env.LASTFM_TIMEOUT_MS || '30000', 10);
+const DEFAULT_MAX_RETRIES = 3;
+const PORT = parseInt(process.env.PORT, 10) || 3000;
+const FALLBACK_PORT = 3001;
+const API_KEY = process.env.LASTFM_API_KEY;
+const BASE_URL = 'http://ws.audioscrobbler.com/2.0/';
+const DATA_DIR = path.join(__dirname, 'data');
+const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// --- Logging Helper ---------------------------------------------------------
 function formatLog(level, category, message, meta) {
   const timestamp = new Date().toISOString();
   let metaStr = '';
@@ -51,13 +61,55 @@ const logger = {
 };
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.LASTFM_API_KEY;
-const BASE_URL = 'http://ws.audioscrobbler.com/2.0/';
-const DATA_DIR = path.join(__dirname, 'data');
-const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// --- Active Download State & SSE Management ---
+// --- Server start with fallback port ----------------------------------------
+let server;
+try {
+  server = app.listen(PORT, () => {
+    logger.info('Server', `Listening on port ${PORT}`);
+  });
+} catch (e) {
+  if (e.code === 'EADDRINUSE') {
+    logger.warn('Server', `Port ${PORT} in use, falling back to ${FALLBACK_PORT}`);
+    server = app.listen(FALLBACK_PORT, () => {
+      logger.info('Server', `Listening on fallback port ${FALLBACK_PORT}`);
+    });
+  } else {
+    logger.error('Server', `Failed to start: ${e.message}`, e);
+    process.exit(1);
+  }
+}
+
+// --- Graceful shutdown ------------------------------------------------------
+async function shutdown() {
+  logger.info('Server', 'Shutting down…');
+  logger.info('Server', 'aborting downloads');
+  for (const [, job] of activeDownloads) {
+    if (job.abortController) {
+	    logger.info('Server', 'aborting job');
+	    job.abortController.abort();
+    }
+  }
+  server.close(() => {
+    logger.info('Server', 'Closed HTTP server');
+    process.exit(0);
+  });
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+// --- Unhandled promise rejections -------------------------------------------
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Uncaught', 'Unhandled promise rejection', { reason, promise });
+});
+
+// Validate essential configuration
+if (!API_KEY) {
+  logger.error('Config', 'LASTFM_API_KEY environment variable is missing. Exiting.');
+  process.exit(1);
+}
+
+// --- Active Download State & SSE Management ---------------------------------
 // username (lowercase) -> { abortController, aborted: boolean, progress: Object }
 const activeDownloads = new Map();
 // username (lowercase) -> Set<res>
@@ -89,7 +141,6 @@ app.use((req, res, next) => {
   res.on('finish', () => {
     const duration = Date.now() - startTime;
     const { statusCode } = res;
-    // Keep SSE connections from flooding request finished logs while streaming
     const logLevel = statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info';
     logger[logLevel]('HTTP', `${method} ${originalUrl} ${statusCode} - ${duration}ms`);
   });
@@ -130,8 +181,17 @@ async function loadScrobbles(username) {
   } catch (err) {
     if (err.code === 'ENOENT') {
       logger.debug('Storage', `No local cache found for user "${username}" (${filePath})`);
+    } else if (err.name === 'SyntaxError' || err.message.includes('JSON')) {
+      // Corrupted JSON file – move it aside and start fresh
+      const backupPath = `${filePath}.corrupt.${Date.now()}`;
+      try {
+        await fs.rename(filePath, backupPath);
+        logger.error('Storage', `Corrupted scrobbles file for user "${username}" moved to ${backupPath}`);
+      } catch (renameErr) {
+        logger.error('Storage', `Failed to rename corrupted scrobbles file for user "${username}": ${renameErr.message}`, renameErr);
+      }
     } else {
-      logger.warn('Storage', `Failed reading scrobbles file for user "${username}": ${err.message}`);
+      logger.warn('Storage', `Failed reading scrobbles file for user "${username}": ${err.message}`, err);
     }
     return [];
   }
@@ -141,7 +201,6 @@ async function loadScrobbles(username) {
 async function saveScrobbles(username, scrobbles) {
   const filePath = getDataFilePath(username);
   const uniqueMap = new Map();
-
   for (const track of scrobbles) {
     if (track.date && track.date.uts) {
       const artistName = track.artist?.['#text'] || track.artist?.name || track.artist || 'Unknown Artist';
@@ -150,10 +209,8 @@ async function saveScrobbles(username, scrobbles) {
       uniqueMap.set(key, track);
     }
   }
-
   const cleanList = Array.from(uniqueMap.values());
   cleanList.sort((a, b) => Number(a.date.uts) - Number(b.date.uts));
-
   await fs.writeFile(filePath, JSON.stringify(cleanList, null, 2));
   return cleanList;
 }
@@ -164,7 +221,7 @@ async function loadDownloadProgress(username) {
   try {
     const data = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(data);
-  } catch (err) {
+  } catch {
     return null;
   }
 }
@@ -178,9 +235,8 @@ async function saveDownloadProgress(username, progress) {
 // Helper: Sleep
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// --- Last.fm API Throttling & Network Error Utilities ---
+// --- Last.fm API Throttling & Network Error Utilities ------------------------
 let lastFmLastRequestTime = 0;
-// Default to 1000ms (1 request/sec) or configured LASTFM_THROTTLE_MS
 let currentLastFmThrottleMs = Math.max(100, parseInt(process.env.LASTFM_THROTTLE_MS || '1000', 10));
 
 function getThrottleMs() {
@@ -197,14 +253,9 @@ function setThrottleMs(ms) {
   return currentLastFmThrottleMs;
 }
 
-// Throttle helper: guarantees minimum delay between Last.fm API requests
 async function throttleLastFm(customThrottleMs = null, abortSignal = null) {
-  const delay = typeof customThrottleMs === 'number' && customThrottleMs >= 0
-    ? customThrottleMs
-    : currentLastFmThrottleMs;
-
+  const delay = typeof customThrottleMs === 'number' && customThrottleMs >= 0 ? customThrottleMs : currentLastFmThrottleMs;
   if (delay <= 0) return;
-
   const now = Date.now();
   const elapsed = now - lastFmLastRequestTime;
   if (elapsed < delay) {
@@ -227,13 +278,11 @@ async function throttleLastFm(customThrottleMs = null, abortSignal = null) {
   lastFmLastRequestTime = Date.now();
 }
 
-// Extract detailed network error diagnosis from error chain
 function extractNetworkErrorDetails(err) {
   const codes = [];
   const messages = [];
   let curr = err;
   let depth = 0;
-
   while (curr && depth < 5) {
     if (curr.code && !codes.includes(curr.code)) codes.push(curr.code);
     if (curr.name && curr.name !== 'TypeError' && curr.name !== 'Error' && !codes.includes(curr.name)) {
@@ -248,14 +297,11 @@ function extractNetworkErrorDetails(err) {
     curr = curr.cause;
     depth++;
   }
-
   const codeStr = codes.join(' / ');
   const rawMsg = messages.join('; ') || err.message;
   const lower = `${codeStr} ${rawMsg}`.toLowerCase();
-
   let friendlyCategory = 'Network Connection Error';
   let friendlyDescription = rawMsg;
-
   if (lower.includes('etimedout') || lower.includes('und_err_connect_timeout') || lower.includes('time out') || lower.includes('timeout')) {
     friendlyCategory = 'Connection Timeout';
     friendlyDescription = 'Last.fm took too long to connect or respond. This usually indicates high Last.fm server load or packet loss.';
@@ -275,22 +321,20 @@ function extractNetworkErrorDetails(err) {
     friendlyCategory = 'SSL/TLS Handshake Error';
     friendlyDescription = 'Failed to establish secure TLS/SSL connection with Last.fm.';
   }
-
   return {
     category: friendlyCategory,
     code: codeStr || (err.name !== 'TypeError' ? err.name : 'NETWORK_ERROR'),
     description: friendlyDescription,
     rawMessage: rawMsg,
-    summary: `${friendlyCategory}: ${friendlyDescription}${codeStr ? ` [Code: ${codeStr}]` : ''}`
+    summary: `${friendlyCategory}: ${friendlyDescription}${codeStr ? ` [Code: ${codeStr}]` : ''}`,
   };
 }
 
-// Fetch single page from Last.fm with throttling, timeout, and robust network error logging
 async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
   const {
     throttleMs = currentLastFmThrottleMs,
     abortSignal = null,
-    maxRetries = 3,
+    maxRetries = DEFAULT_MAX_RETRIES,
     onRetry = null,
   } = options;
 
@@ -303,11 +347,8 @@ async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
 
   let attempt = 0;
   while (attempt <= maxRetries) {
-    if (abortSignal && abortSignal.aborted) {
-      throw new Error('Download aborted by user');
-    }
+    if (abortSignal?.aborted) throw new Error('Download aborted by user');
 
-    // Apply throttling delay before calling Last.fm
     await throttleLastFm(throttleMs, abortSignal);
 
     const startTime = Date.now();
@@ -315,17 +356,14 @@ async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
 
     let res;
     let requestError = null;
-
     try {
-      // 30-second request timeout combined with job abortSignal
-      const requestTimeoutSignal = AbortSignal.timeout ? AbortSignal.timeout(30000) : null;
+      const timeoutSignal = AbortSignal.timeout ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : null;
       let effectiveSignal = abortSignal;
-      if (abortSignal && requestTimeoutSignal && AbortSignal.any) {
-        effectiveSignal = AbortSignal.any([abortSignal, requestTimeoutSignal]);
-      } else if (!abortSignal && requestTimeoutSignal) {
-        effectiveSignal = requestTimeoutSignal;
+      if (abortSignal && timeoutSignal && AbortSignal.any) {
+        effectiveSignal = AbortSignal.any([abortSignal, timeoutSignal]);
+      } else if (!abortSignal && timeoutSignal) {
+        effectiveSignal = timeoutSignal;
       }
-
       res = await fetch(url, { signal: effectiveSignal });
     } catch (err) {
       requestError = err;
@@ -333,52 +371,30 @@ async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
 
     const duration = Date.now() - startTime;
 
-    // Handle network-level errors (DNS, timeout, connection reset, socket drops)
     if (requestError) {
-      if (abortSignal && abortSignal.aborted) {
-        throw new Error('Download aborted by user');
-      }
-
-      const errorInfo = extractNetworkErrorDetails(requestError);
-      const isRetryable = attempt < maxRetries;
-
-      logger.error('LastFM', `[${username}] Network error on page ${page} (attempt ${attempt + 1}/${maxRetries + 1}, ${duration}ms): ${errorInfo.summary}`, {
+      if (abortSignal?.aborted) throw new Error('Download aborted by user');
+      const info = extractNetworkErrorDetails(requestError);
+      const retryable = attempt < maxRetries;
+      logger.error('LastFM', `[${username}] Network error on page ${page} (attempt ${attempt + 1}/${maxRetries + 1}, ${duration}ms): ${info.summary}`, {
         page,
         durationMs: duration,
-        code: errorInfo.code,
-        category: errorInfo.category,
+        code: info.code,
+        category: info.category,
         cause: requestError.cause?.message || requestError.message,
       });
-
-      if (isRetryable) {
+      if (retryable) {
         attempt++;
         const backoffMs = Math.min(10000, 1500 * Math.pow(1.5, attempt));
         logger.warn('LastFM', `[${username}] Retrying page ${page} in ${(backoffMs / 1000).toFixed(1)}s (attempt ${attempt}/${maxRetries})...`);
         if (typeof onRetry === 'function') {
-          onRetry({
-            page,
-            attempt,
-            maxRetries,
-            backoffMs,
-            error: errorInfo.summary,
-            category: errorInfo.category,
-            code: errorInfo.code
-          });
+          onRetry({ page, attempt, maxRetries, backoffMs, error: info.summary, category: info.category, code: info.code });
         }
         await sleep(backoffMs);
         continue;
       }
-
-      const finalError = new Error(`Network error calling Last.fm on page ${page}: ${errorInfo.summary}`);
-      finalError.code = errorInfo.code;
-      finalError.category = errorInfo.category;
-      finalError.description = errorInfo.description;
-      finalError.page = page;
-      finalError.isNetworkError = true;
-      throw finalError;
+      throw requestError;
     }
 
-    // Inspect HTTP response safely
     let bodyText = '';
     let data = null;
     try {
@@ -391,38 +407,27 @@ async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
     }
 
     if (!res.ok) {
-      const isTransientHttp = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504;
+      const isTransientHttp = [429, 502, 503, 504].includes(res.status);
       const apiMsg = data?.message || '';
       const snippet = apiMsg || (bodyText.length > 200 ? `${bodyText.slice(0, 200).replace(/\s+/g, ' ')}...` : bodyText.replace(/\s+/g, ' '));
       const httpErrorSummary = `HTTP ${res.status} ${res.statusText || ''}${snippet ? ` - ${snippet}` : ''}`;
-
       logger.error('LastFM', `[${username}] HTTP error on page ${page} (${duration}ms): ${httpErrorSummary}`, {
         status: res.status,
         statusText: res.statusText,
         page,
         durationMs: duration,
       });
-
       if (isTransientHttp && attempt < maxRetries) {
         attempt++;
         const retryAfter = parseInt(res.headers.get('retry-after') || '2', 10);
         const backoffMs = Math.max(retryAfter * 1000, 2000 * attempt);
         logger.warn('LastFM', `[${username}] Transient HTTP ${res.status} on page ${page}. Waiting ${(backoffMs / 1000).toFixed(1)}s before retry ${attempt}/${maxRetries}...`);
         if (typeof onRetry === 'function') {
-          onRetry({
-            page,
-            attempt,
-            maxRetries,
-            backoffMs,
-            error: httpErrorSummary,
-            category: `HTTP ${res.status}`,
-            code: `HTTP_${res.status}`
-          });
+          onRetry({ page, attempt, maxRetries, backoffMs, error: httpErrorSummary, category: `HTTP ${res.status}`, code: `HTTP_${res.status}` });
         }
         await sleep(backoffMs);
         continue;
       }
-
       const httpErr = new Error(`Last.fm returned ${httpErrorSummary}`);
       httpErr.status = res.status;
       httpErr.code = `HTTP_${res.status}`;
@@ -435,7 +440,6 @@ async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
       throw httpErr;
     }
 
-    // Last.fm API-level errors (HTTP 200 with JSON error payload)
     if (data && data.error) {
       logger.error('LastFM', `[${username}] API Error [Code ${data.error}] on page ${page}: ${data.message}`, {
         errorCode: data.error,
@@ -465,36 +469,36 @@ async function fetchLastFmPage(username, page = 1, limit = 200, options = {}) {
   }
 }
 
-// Helper to normalize tracks array from Last.fm API response
 function extractTracks(recenttracks) {
   if (!recenttracks || !recenttracks.track) return [];
   const raw = Array.isArray(recenttracks.track) ? recenttracks.track : [recenttracks.track];
-  return raw.filter(t => t && t.date && t.date.uts);
+  return raw.filter((t) => t && t.date && t.date.uts);
 }
 
-// --- Download Job Runner with Incremental Writes, Resume Support, and Throttling ---
+// --- Download Job Runner -----------------------------------------------------
+import { randomUUID } from 'crypto';
 async function runDownloadJob(username, { restart = false, throttleMs = null } = {}) {
   const key = username.toLowerCase().trim();
 
   if (activeDownloads.has(key)) {
-    logger.warn('DownloadJob', `Download already in progress for "${key}"`);
+    logger.warn('DownloadJob', `[${key}] Download already in progress`);
     return { alreadyRunning: true };
   }
 
-  const effectiveThrottle = typeof throttleMs === 'number' && throttleMs >= 100
-    ? throttleMs
-    : currentLastFmThrottleMs;
-
+  const effectiveThrottle = typeof throttleMs === 'number' && throttleMs >= 100 ? throttleMs : currentLastFmThrottleMs;
   const abortController = new AbortController();
+  const jobId = randomUUID();
   const jobState = {
+    id: jobId,
+    username: key,
     abortController,
     aborted: false,
     throttleMs: effectiveThrottle,
     progress: null,
   };
   activeDownloads.set(key, jobState);
+  logger.info('DownloadJob', `[${jobId}] Started for ${key}`, { jobId, username: key });
 
-  // Execute asynchronously in background
   (async () => {
     try {
       let existingProgress = restart ? null : await loadDownloadProgress(key);
@@ -504,12 +508,7 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
       let totalPages = 1;
       let totalTracks = 0;
 
-      const canResume = !restart &&
-        existingProgress &&
-        existingProgress.status !== 'completed' &&
-        typeof existingProgress.lastPageFetched === 'number' &&
-        existingProgress.lastPageFetched > 0;
-
+      const canResume = !restart && existingProgress && existingProgress.status !== 'completed' && typeof existingProgress.lastPageFetched === 'number' && existingProgress.lastPageFetched > 0;
       if (canResume) {
         startPage = existingProgress.lastPageFetched + 1;
         totalPages = existingProgress.totalPages || 1;
@@ -519,7 +518,6 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
         logger.info('DownloadJob', `[${key}] Starting fresh download from page 1 (throttle: ${jobState.throttleMs}ms)`);
       }
 
-      // Helper for retry callbacks
       const createRetryHandler = () => (retryInfo) => {
         logger.warn('DownloadJob', `[${key}] Retry ${retryInfo.attempt}/${retryInfo.maxRetries} for page ${retryInfo.page}: ${retryInfo.error}`);
         const retryProgress = {
@@ -533,26 +531,23 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
           retryWaitSeconds: Math.round(retryInfo.backoffMs / 1000),
           throttleMs: jobState.throttleMs,
           message: `Network glitch on page ${retryInfo.page}. Retrying attempt ${retryInfo.attempt} of ${retryInfo.maxRetries}...`,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
         };
         jobState.progress = retryProgress;
         broadcastDownloadEvent(key, 'progress', retryProgress);
       };
 
-      // If starting fresh or starting at page 1, fetch page 1 to establish totalPages and totalTracks
       if (startPage === 1) {
         const initialData = await fetchLastFmPage(key, 1, 200, {
           throttleMs: jobState.throttleMs,
           abortSignal: jobState.abortController.signal,
-          onRetry: createRetryHandler()
+          onRetry: createRetryHandler(),
+          maxRetries: DEFAULT_MAX_RETRIES,
         });
         totalPages = parseInt(initialData?.['@attr']?.totalPages || '1', 10);
         totalTracks = parseInt(initialData?.['@attr']?.total || '0', 10);
-
         const page1Tracks = extractTracks(initialData);
-        // Incremental save of page 1 to disk
         localScrobbles = await saveScrobbles(key, page1Tracks);
-
         const isComplete = totalPages <= 1;
         const progress = {
           username: key,
@@ -564,26 +559,20 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
           savedTracksCount: localScrobbles.length,
           percent: isComplete ? 100 : Math.min(100, Math.round((1 / totalPages) * 100)),
           throttleMs: jobState.throttleMs,
-          message: isComplete
-            ? `Download completed: ${localScrobbles.length} scrobbles saved`
-            : `Downloaded page 1 of ${totalPages} (${localScrobbles.length} tracks saved)`,
+          message: isComplete ? `Download completed: ${localScrobbles.length} scrobbles saved` : `Downloaded page 1 of ${totalPages} (${localScrobbles.length} tracks saved)`,
           startedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
-
         jobState.progress = progress;
         await saveDownloadProgress(key, progress);
         broadcastDownloadEvent(key, isComplete ? 'complete' : 'progress', progress);
-
         if (isComplete) {
           activeDownloads.delete(key);
           return;
         }
-
         startPage = 2;
       }
 
-      // If resuming and all pages were already fetched
       if (startPage > totalPages) {
         const progress = {
           username: key,
@@ -605,7 +594,6 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
         return;
       }
 
-      // Fetch subsequent pages with incremental write after each page
       for (let page = startPage; page <= totalPages; page++) {
         if (jobState.aborted) {
           const pausedPage = page - 1;
@@ -629,29 +617,24 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
           activeDownloads.delete(key);
           return;
         }
-
         const pageData = await fetchLastFmPage(key, page, 200, {
           throttleMs: jobState.throttleMs,
           abortSignal: jobState.abortController.signal,
-          onRetry: createRetryHandler()
+          onRetry: createRetryHandler(),
+          maxRetries: DEFAULT_MAX_RETRIES,
         });
-
         if (pageData?.['@attr']?.totalPages) {
           totalPages = parseInt(pageData['@attr'].totalPages, 10);
         }
         if (pageData?.['@attr']?.total) {
           totalTracks = parseInt(pageData['@attr'].total, 10);
         }
-
         const newTracks = extractTracks(pageData);
         if (newTracks.length > 0) {
-          // Incrementally update and save scrobbles to disk
           localScrobbles = await saveScrobbles(key, [...localScrobbles, ...newTracks]);
         }
-
         const isComplete = page >= totalPages;
         const percent = Math.min(100, Math.round((page / totalPages) * 100));
-
         const progress = {
           username: key,
           status: isComplete ? 'completed' : 'in_progress',
@@ -662,28 +645,21 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
           savedTracksCount: localScrobbles.length,
           percent,
           throttleMs: jobState.throttleMs,
-          message: isComplete
-            ? `Download completed: ${localScrobbles.length} scrobbles saved!`
-            : `Downloaded page ${page} of ${totalPages} (${localScrobbles.length} tracks saved)`,
+          message: isComplete ? `Download completed: ${localScrobbles.length} scrobbles saved!` : `Downloaded page ${page} of ${totalPages} (${localScrobbles.length} tracks saved)`,
           updatedAt: new Date().toISOString(),
         };
-
         jobState.progress = progress;
-        // Incrementally save progress state to disk
         await saveDownloadProgress(key, progress);
         broadcastDownloadEvent(key, isComplete ? 'complete' : 'progress', progress);
-
         if (page % 5 === 0 || isComplete) {
           logger.info('DownloadJob', `[${key}] Page ${page}/${totalPages} (${percent}%) - ${localScrobbles.length} tracks on disk (throttle: ${jobState.throttleMs}ms)`);
         }
       }
-
       logger.info('DownloadJob', `[${key}] Full download finished. Total saved: ${localScrobbles.length}`);
       activeDownloads.delete(key);
     } catch (err) {
       const failedPage = err.page || jobState.progress?.currentPage || 1;
       logger.error('DownloadJob', `[${key}] Failed during download at page ${failedPage}: ${err.message}`, err);
-
       const currentProgress = jobState.progress || {};
       const errorProgress = {
         ...currentProgress,
@@ -708,6 +684,66 @@ async function runDownloadJob(username, { restart = false, throttleMs = null } =
   return { started: true };
 }
 
+// API: Fetch any scrobbles newer than the latest locally stored entry.
+app.post('/api/scrobbles/sync', async (req, res) => {
+  const { username, throttleMs = null } = req.body || {};
+  if (typeof username !== 'string' || !username.trim()) {
+    return res.status(400).json({ error: 'A username is required to sync scrobbles.' });
+  }
+
+  const key = username.trim();
+  const localScrobbles = await loadScrobbles(key);
+  if (localScrobbles.length === 0) {
+    return res.status(400).json({ error: 'No local scrobbles found. Download scrobbles first.' });
+  }
+
+  try {
+    const latestStoredUts = Math.max(...localScrobbles.map((track) => Number(track.date?.uts || 0)));
+    const newTracks = [];
+    const effectiveThrottle = typeof throttleMs === 'number' && throttleMs >= 100
+      ? throttleMs
+      : currentLastFmThrottleMs;
+    let page = 1;
+    let totalPages = 1;
+    let reachedExistingTrack = false;
+
+    do {
+      const pageData = await fetchLastFmPage(key, page, 200, {
+        throttleMs: effectiveThrottle,
+        maxRetries: DEFAULT_MAX_RETRIES,
+      });
+      totalPages = parseInt(pageData?.['@attr']?.totalPages || '1', 10);
+      for (const track of extractTracks(pageData)) {
+        if (Number(track.date.uts) > latestStoredUts) {
+          newTracks.push(track);
+        } else {
+          reachedExistingTrack = true;
+          break;
+        }
+      }
+      page += 1;
+    } while (page <= totalPages && !reachedExistingTrack);
+
+    const combined = newTracks.length > 0
+      ? await saveScrobbles(key, [...localScrobbles, ...newTracks])
+      : localScrobbles;
+    logger.info('ScrobbleSync', `[${key}] Sync finished`, {
+      added: newTracks.length,
+      total: combined.length,
+      pagesFetched: page - 1,
+    });
+    return res.json({ added: newTracks.length, total: combined.length });
+  } catch (err) {
+    logger.error('ScrobbleSync', `[${key}] Sync failed: ${err.message}`, err);
+    return res.status(502).json({
+      error: err.message,
+      description: err.description || err.message,
+      errorCategory: err.category || 'Sync Error',
+      errorCode: err.code || 'SYNC_ERROR',
+    });
+  }
+});
+
 // API: Download status & progress check
 app.get('/api/scrobbles/status/:username', async (req, res) => {
   const key = req.params.username.toLowerCase().trim();
@@ -716,24 +752,13 @@ app.get('/api/scrobbles/status/:username', async (req, res) => {
   const localScrobbles = await loadScrobbles(key);
 
   const isDownloading = !!activeJob;
-  const canResume = !isDownloading &&
-    progress &&
-    progress.status !== 'completed' &&
-    typeof progress.lastPageFetched === 'number' &&
-    progress.lastPageFetched > 0 &&
-    progress.lastPageFetched < (progress.totalPages || Infinity);
+  const canResume = !isDownloading && progress && progress.status !== 'completed' && typeof progress.lastPageFetched === 'number' && progress.lastPageFetched > 0 && progress.lastPageFetched < (progress.totalPages || Infinity);
 
   res.json({
     username: key,
     isDownloading,
     canResume,
-    progress: progress || {
-      status: 'idle',
-      lastPageFetched: 0,
-      totalPages: 0,
-      savedTracksCount: localScrobbles.length,
-      percent: 0,
-    },
+    progress: progress || { status: 'idle', lastPageFetched: 0, totalPages: 0, savedTracksCount: localScrobbles.length, percent: 0 },
     localCount: localScrobbles.length,
   });
 });
@@ -744,9 +769,7 @@ app.get('/api/scrobbles/download-stream', async (req, res) => {
   if (!username) {
     return res.status(400).send('Query parameter "username" is required');
   }
-
   const key = username.toLowerCase().trim();
-
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -757,7 +780,6 @@ app.get('/api/scrobbles/download-stream', async (req, res) => {
   }
   sseClients.get(key).add(res);
 
-  // Send initial status event on connection
   const activeJob = activeDownloads.get(key);
   const currentProgress = activeJob?.progress || await loadDownloadProgress(key);
   if (currentProgress) {
@@ -785,330 +807,187 @@ app.get('/api/scrobbles/throttle', (req, res) => {
   });
 });
 
+// Keep this parameterized route after specific one-segment routes such as
+// /download-stream and /throttle so it cannot intercept them.
+app.get('/api/scrobbles/:username', async (req, res) => {
+  const username = req.params.username.trim();
+  const scrobbles = await loadScrobbles(username);
+  if (scrobbles.length === 0) {
+    return res.json({ username, scrobbles: [] });
+  }
+
+  const firstUts = Number(scrobbles[0]?.date?.uts || 0);
+  const lastUts = Number(scrobbles[scrobbles.length - 1]?.date?.uts || firstUts);
+  const spanMonths = Math.ceil(Math.max(0, lastUts - firstUts) / 86400) / 30.4375;
+  return res.json({
+    username,
+    scrobbles,
+    stats: {
+      totalScrobbles: scrobbles.length,
+      firstScrobble: new Date(firstUts * 1000).toISOString(),
+      lastScrobble: new Date(lastUts * 1000).toISOString(),
+      scrobblesPerMonth: spanMonths > 0 ? (scrobbles.length / spanMonths).toFixed(2) : scrobbles.length,
+    },
+  });
+});
+
 app.post('/api/scrobbles/throttle', (req, res) => {
   const { throttleMs } = req.body;
   const parsed = parseInt(throttleMs, 10);
   if (isNaN(parsed) || parsed < 100) {
     return res.status(400).json({ error: 'throttleMs must be a positive integer >= 100 (ms)' });
   }
-
   const updated = setThrottleMs(parsed);
   // Dynamically update active jobs
   for (const [userKey, job] of activeDownloads.entries()) {
     job.throttleMs = updated;
     logger.info('DownloadJob', `[${userKey}] Dynamically adjusted active download throttle to ${updated}ms`);
   }
-
-  res.json({
-    message: `Throttle speed set to ${updated}ms (${(1000 / updated).toFixed(2)} req/sec)`,
-    throttleMs: updated,
-    reqPerSec: (1000 / updated).toFixed(2),
-  });
+  res.json({ throttleMs: updated });
 });
 
-// API: Download ALL scrobbles (supports resume or restart)
+// API: Start or resume a scrobble download.
 app.post('/api/scrobbles/download-all', async (req, res) => {
-  const { username, restart = false, throttleMs } = req.body;
-  if (!username) {
-    logger.warn('DownloadAll', 'Rejected request: missing username');
-    return res.status(400).json({ error: 'Username is required' });
-  }
-
-  const trimmedUsername = username.trim();
-  const key = trimmedUsername.toLowerCase();
-
-  const activeJob = activeDownloads.get(key);
-  if (activeJob) {
-    return res.json({
-      message: 'Download already in progress',
-      inProgress: true,
-      progress: activeJob.progress,
+  const { username, restart = false, throttleMs = null } = req.body || {};
+  if (typeof username !== 'string' || !username.trim()) {
+    logger.warn('DownloadRequest', 'Rejected download request with missing username', {
+      method: req.method,
+      path: req.originalUrl,
+      body: req.body,
     });
+    return res.status(400).json({ error: 'A username is required to start a download.' });
   }
 
-  let jobThrottle = currentLastFmThrottleMs;
-  if (throttleMs) {
-    const parsedThrottle = parseInt(throttleMs, 10);
-    if (!isNaN(parsedThrottle) && parsedThrottle >= 100) {
-      jobThrottle = parsedThrottle;
-      setThrottleMs(parsedThrottle);
-    }
-  }
-
-  const existingProgress = restart ? null : await loadDownloadProgress(key);
-  const isResuming = !restart &&
-    existingProgress &&
-    existingProgress.status !== 'completed' &&
-    existingProgress.lastPageFetched > 0;
-
-  await runDownloadJob(trimmedUsername, { restart: !!restart, throttleMs: jobThrottle });
-
-  res.json({
-    message: isResuming
-      ? `Resuming download from page ${existingProgress.lastPageFetched + 1}`
-      : 'Download started',
-    started: true,
-    resuming: isResuming,
-    throttleMs: jobThrottle,
+  const normalizedUsername = username.trim();
+  logger.info('DownloadRequest', 'Received download request', {
+    username: normalizedUsername,
+    restart: Boolean(restart),
+    throttleMs,
+    method: req.method,
+    path: req.originalUrl,
   });
-});
-
-// API: Pause / cancel an active download
-app.post('/api/scrobbles/download-cancel', async (req, res) => {
-  const { username } = req.body;
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
-
-  const key = username.toLowerCase().trim();
-  const activeJob = activeDownloads.get(key);
-
-  if (!activeJob) {
-    return res.json({ message: 'No active download running for this user' });
-  }
-
-  activeJob.aborted = true;
-  activeJob.abortController.abort();
-  logger.info('DownloadJob', `[${key}] User requested download pause/cancel`);
-  res.json({ message: 'Download pause requested' });
-});
-
-// API: Sync NEWER scrobbles
-app.post('/api/scrobbles/sync', async (req, res, next) => {
-  const { username, throttleMs } = req.body;
-  if (!username) {
-    logger.warn('Sync', 'Rejected request: missing username');
-    return res.status(400).json({ error: 'Username is required' });
-  }
-
-  const trimmedUsername = username.trim();
-  const syncThrottle = (throttleMs && parseInt(throttleMs, 10) >= 100)
-    ? parseInt(throttleMs, 10)
-    : currentLastFmThrottleMs;
-
-  logger.info('Sync', `Starting sync for user: "${trimmedUsername}" (throttle: ${syncThrottle}ms)`);
 
   try {
-    const local = await loadScrobbles(trimmedUsername);
-    if (local.length === 0) {
-      logger.warn('Sync', `Sync failed for "${trimmedUsername}": no local history found`);
-      return res.status(400).json({ error: 'No local history found. Perform a full download first.' });
-    }
-
-    const latestUts = Math.max(...local.map(s => Number(s.date.uts)));
-    logger.info('Sync', `[${trimmedUsername}] Local latest scrobble: ${new Date(latestUts * 1000).toISOString()}`);
-
-    let page = 1;
-    let newTracks = [];
-    let done = false;
-
-    while (!done) {
-      logger.debug('Sync', `[${trimmedUsername}] Fetching page ${page} to check for newer scrobbles`);
-      const pageData = await fetchLastFmPage(trimmedUsername, page, 200, {
-        throttleMs: syncThrottle
-      });
-      const pageTracks = extractTracks(pageData);
-
-      if (pageTracks.length === 0) {
-        logger.debug('Sync', `[${trimmedUsername}] No tracks returned on page ${page}; ending sync`);
-        break;
-      }
-
-      for (const track of pageTracks) {
-        const trackUts = Number(track.date.uts);
-        if (trackUts > latestUts) {
-          newTracks.push(track);
-        } else {
-          done = true;
-          break;
-        }
-      }
-
-      const totalPages = parseInt(pageData?.['@attr']?.totalPages || '1', 10);
-      if (page >= totalPages || done) {
-        break;
-      }
-
-      page++;
-    }
-
-    logger.info('Sync', `[${trimmedUsername}] Sync complete. Found ${newTracks.length} new scrobbles.`);
-    const updated = await saveScrobbles(trimmedUsername, [...local, ...newTracks]);
-    res.json({ message: 'Sync complete', added: newTracks.length, total: updated.length });
+    const result = await runDownloadJob(normalizedUsername, {
+      restart: Boolean(restart),
+      throttleMs: typeof throttleMs === 'number' ? throttleMs : null,
+    });
+    return res.json({
+      message: result.alreadyRunning ? 'A download is already running for this user.' : 'Download started.',
+      ...result,
+    });
   } catch (err) {
-    logger.error('Sync', `Sync failed for "${trimmedUsername}": ${err.message}`, err);
-    res.status(500).json({
-      error: err.message,
-      errorCode: err.code || 'SYNC_ERROR',
-      errorCategory: err.category || 'Network Error',
-      description: err.description || err.message,
+    logger.error('DownloadRequest', 'Failed to start download', {
+      username: normalizedUsername,
+      restart: Boolean(restart),
+      throttleMs,
+      message: err.message,
+      stack: err.stack,
+    });
+    return res.status(500).json({
+      error: err.message || 'Failed to start download.',
+      errorCategory: 'Download Initiation Error',
+      errorCode: err.code || 'INIT_ERROR',
+      errorDescription: err.message || 'Failed to start download.',
     });
   }
 });
 
-// API: Get Local Scrobbles & Computed Stats
-app.get('/api/scrobbles/:username', async (req, res, next) => {
-  const username = req.params.username.trim();
-  logger.info('Stats', `Fetching stats and local scrobbles for user: "${username}"`);
+// API: Request a download pause after the current page finishes.
+app.post('/api/scrobbles/download-cancel', (req, res) => {
+  const { username } = req.body || {};
+  if (typeof username !== 'string' || !username.trim()) {
+    logger.warn('DownloadPause', 'Rejected pause request with missing username', {
+      method: req.method,
+      path: req.originalUrl,
+      body: req.body,
+    });
+    return res.status(400).json({ error: 'A username is required to pause a download.' });
+  }
 
+  const key = username.trim().toLowerCase();
+  const job = activeDownloads.get(key);
+  if (!job) {
+    logger.info('DownloadPause', `No active download found for ${key}`);
+    return res.json({ message: 'No active download to pause.', paused: false });
+  }
+
+  // Let the current page finish so its progress can be saved before pausing.
+  job.aborted = true;
+  logger.info('DownloadPause', `Pause requested for ${key}`, {
+    jobId: job.id,
+    currentPage: job.progress?.currentPage || null,
+  });
+  return res.json({ message: 'Pause requested; the current page will finish first.', paused: true });
+});
+
+// API: MusicBrainz enrichment status and paginated results.
+app.get('/api/musicbrainz/status/:username', async (req, res) => {
   try {
-    const scrobbles = await loadScrobbles(username);
-    if (scrobbles.length === 0) {
-      logger.info('Stats', `No local scrobbles found for user "${username}"`);
-      return res.json({ scrobbles: [], stats: null });
-    }
-
-    const totalScrobbles = scrobbles.length;
-    const firstDate = new Date(Number(scrobbles[0].date.uts) * 1000);
-    const lastDate = new Date(Number(scrobbles[scrobbles.length - 1].date.uts) * 1000);
-
-    const diffDays = Math.max(1, Math.ceil((lastDate - firstDate) / (1000 * 60 * 60 * 24)));
-    const diffMonths = diffDays / 30.4375;
-    const perMonth = diffMonths > 0 ? (totalScrobbles / diffMonths).toFixed(1) : totalScrobbles;
-
-    // Monthly breakdown map
-    const monthlyMap = {};
-    scrobbles.forEach(s => {
-      const d = new Date(Number(s.date.uts) * 1000);
-      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      monthlyMap[ym] = (monthlyMap[ym] || 0) + 1;
-    });
-
-    logger.info('Stats', `Calculated stats for "${username}": ${totalScrobbles} tracks, ~${perMonth}/mo from ${firstDate.toISOString().slice(0, 10)} to ${lastDate.toISOString().slice(0, 10)}`);
-
-    res.json({
-      scrobbles,
-      stats: {
-        totalScrobbles,
-        firstScrobble: firstDate.toISOString(),
-        lastScrobble: lastDate.toISOString(),
-        scrobblesPerMonth: parseFloat(perMonth),
-        monthlyBreakdown: monthlyMap,
-      },
-    });
+    return res.json(await getMusicBrainzStatus(req.params.username));
   } catch (err) {
-    logger.error('Stats', `Failed computing stats for "${username}": ${err.message}`, err);
-    res.status(500).json({ error: err.message });
+    logger.error('MusicBrainzAPI', `Status lookup failed for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// --- MusicBrainz Enrichment API Routes ---
-
-// API: MusicBrainz Status & Summary Stats
-app.get('/api/musicbrainz/status/:username', async (req, res, next) => {
-  const username = req.params.username?.trim();
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
-
+app.get('/api/musicbrainz/data/:username', async (req, res) => {
   try {
-    const statusData = await getMusicBrainzStatus(username);
-    res.json(statusData);
+    return res.json(await getMusicBrainzData(req.params.username, req.query));
   } catch (err) {
-    logger.error('MusicBrainz', `Failed fetching status for "${username}": ${err.message}`, err);
-    res.status(500).json({ error: err.message });
+    logger.error('MusicBrainzAPI', `Data lookup failed for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// API: MusicBrainz Real-time SSE Progress Stream
+// API: Start or resume MusicBrainz enrichment.
+app.post('/api/musicbrainz/start', async (req, res) => {
+  const { username, restart = false } = req.body || {};
+  if (typeof username !== 'string' || !username.trim()) {
+    return res.status(400).json({ error: 'A username is required to start MusicBrainz enrichment.' });
+  }
+
+  try {
+    const result = await startMusicBrainzJob(username.trim(), { restart: Boolean(restart) });
+    return res.json({
+      message: result.alreadyRunning ? 'MusicBrainz enrichment is already running.' : 'MusicBrainz enrichment started.',
+      ...result,
+    });
+  } catch (err) {
+    logger.error('MusicBrainzAPI', `Could not start enrichment for ${username.trim()}: ${err.message}`, err);
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+// API: Pause active MusicBrainz enrichment.
+app.post('/api/musicbrainz/pause', (req, res) => {
+  const { username } = req.body || {};
+  if (typeof username !== 'string' || !username.trim()) {
+    return res.status(400).json({ error: 'A username is required to pause MusicBrainz enrichment.' });
+  }
+  return res.json(pauseMusicBrainzJob(username.trim()));
+});
+
+// API: MusicBrainz job event stream.
 app.get('/api/musicbrainz/stream', async (req, res) => {
-  const username = req.query.username;
+  const username = typeof req.query.username === 'string' ? req.query.username.trim() : '';
   if (!username) {
-    return res.status(400).send('Query parameter "username" is required');
+    return res.status(400).json({ error: 'Query parameter "username" is required.' });
   }
-
-  const key = username.toLowerCase().trim();
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
-
-  registerMbSseClient(key, res);
-
-  try {
-    const currentStatus = await getMusicBrainzStatus(key);
-    res.write(`event: mb-status\ndata: ${JSON.stringify(currentStatus)}\n\n`);
-  } catch (err) {
-    logger.warn('MusicBrainzSSE', `Error sending initial SSE status: ${err.message}`);
-  }
-
-  req.on('close', () => {
-    removeMbSseClient(key, res);
-  });
-});
-
-// API: MusicBrainz Paginated & Filtered Data
-app.get('/api/musicbrainz/data/:username', async (req, res, next) => {
-  const username = req.params.username?.trim();
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
+  registerMbSseClient(username, res);
 
   try {
-    const data = await getMusicBrainzData(username, req.query);
-    res.json(data);
+    const status = await getMusicBrainzStatus(username);
+    sendSSE(res, 'mb-status', { progress: status.progress, status: status.status });
   } catch (err) {
-    logger.error('MusicBrainz', `Failed fetching MB data for "${username}": ${err.message}`, err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// API: Start or Resume MusicBrainz Lookup Job
-app.post('/api/musicbrainz/start', async (req, res, next) => {
-  const { username, restart = false } = req.body;
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
+    logger.error('MusicBrainzAPI', `Could not initialize event stream for ${username}: ${err.message}`, err);
+    sendSSE(res, 'mb-error', { error: err.message });
   }
 
-  try {
-    const result = await startMusicBrainzJob(username, { restart });
-    res.json({
-      message: result.alreadyRunning
-        ? 'MusicBrainz lookup is already running'
-        : 'MusicBrainz enrichment started',
-      ...result,
-    });
-  } catch (err) {
-    logger.error('MusicBrainz', `Failed starting MB job for "${username}": ${err.message}`, err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// API: Pause MusicBrainz Lookup Job
-app.post('/api/musicbrainz/pause', async (req, res, next) => {
-  const { username } = req.body;
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
-
-  try {
-    const result = pauseMusicBrainzJob(username);
-    res.json(result);
-  } catch (err) {
-    logger.error('MusicBrainz', `Failed pausing MB job for "${username}": ${err.message}`, err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 404 Handler for undefined routes
-app.use((req, res) => {
-  logger.warn('Router', `404 Not Found: ${req.method} ${req.originalUrl}`);
-  res.status(404).json({ error: `Route not found: ${req.method} ${req.originalUrl}` });
-});
-
-// Centralized error-handling middleware
-app.use((err, req, res, next) => {
-  logger.error('Unhandled', `Internal error processing ${req.method} ${req.originalUrl}: ${err.message}`, err);
-  res.status(500).json({ error: 'Internal server error', details: err.message });
-});
-
-app.listen(PORT, () => {
-  logger.info('Server', `==============================================`);
-  logger.info('Server', `Last.fm Scrobble Manager backend running`);
-  logger.info('Server', `Local address:    http://localhost:${PORT}`);
-  logger.info('Server', `Data directory:   ${DATA_DIR}`);
-  logger.info('Server', `Public directory: ${PUBLIC_DIR}`);
-  logger.info('Server', `Last.fm API Key:  ${API_KEY ? 'Configured (' + API_KEY.slice(0, 4) + '...' + API_KEY.slice(-4) + ')' : 'NOT SET'}`);
-  logger.info('Server', `==============================================`);
+  req.on('close', () => removeMbSseClient(username, res));
 });
