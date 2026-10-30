@@ -196,6 +196,187 @@
       gap: 10px;
     }
 
+    /* Throttle & Network Error Styles */
+    .throttle-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      padding: 8px 12px;
+      background: #18181c;
+      border: 1px solid #29292e;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .throttle-label {
+      color: #a8a8b3;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .throttle-select {
+      background: #121214;
+      border: 1px solid #3e3e44;
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .throttle-select:focus {
+      outline: none;
+      border-color: #e5151f;
+    }
+    .custom-throttle-input {
+      background: #121214;
+      border: 1px solid #3e3e44;
+      color: #fff;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      width: 90px;
+    }
+    .throttle-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: #1e1e24;
+      color: #4ade80;
+      border: 1px solid rgba(74, 222, 128, 0.25);
+    }
+
+    /* Network / Download Error Alert Banner */
+    .download-error-alert {
+      background: #251013;
+      border: 1px solid #ef4444;
+      color: #fecaca;
+      border-radius: 6px;
+      padding: 14px 16px;
+      margin-top: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 4px 14px rgba(239, 68, 68, 0.2);
+    }
+    .error-alert-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .error-alert-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #f87171;
+      font-size: 15px;
+    }
+    .btn-close-error {
+      background: transparent;
+      border: none;
+      color: #f87171;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 6px;
+      line-height: 1;
+      border-radius: 4px;
+    }
+    .btn-close-error:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: #fff;
+    }
+    .error-alert-body {
+      font-size: 13.5px;
+      line-height: 1.45;
+      color: #fee2e2;
+    }
+    .error-alert-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 2px;
+    }
+    .error-pill {
+      font-size: 11.5px;
+      font-family: monospace;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #39171b;
+      color: #fca5a5;
+      border: 1px solid #7f1d1d;
+    }
+    .error-alert-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    /* Activity & Network Log Drawer */
+    .activity-log-details {
+      margin-top: 15px;
+      background: #141416;
+      border: 1px solid #29292e;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .activity-log-summary {
+      padding: 10px 14px;
+      cursor: pointer;
+      color: #a8a8b3;
+      user-select: none;
+      font-weight: 500;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .activity-log-summary:hover {
+      color: #fff;
+    }
+    .activity-log-container {
+      padding: 10px 14px 14px;
+      border-top: 1px solid #222226;
+    }
+    .activity-log-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+    .activity-log {
+      max-height: 180px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #c4c4cc;
+      background: #0d0d0e;
+      border: 1px solid #1f1f23;
+      border-radius: 4px;
+      padding: 8px 10px;
+    }
+    .log-line {
+      margin-bottom: 3px;
+      word-break: break-all;
+    }
+    .log-line-error {
+      color: #f87171;
+    }
+    .log-line-warn {
+      color: #fbbf24;
+    }
+    .log-line-info {
+      color: #60a5fa;
+    }
+    .log-count {
+      font-size: 11px;
+      padding: 2px 6px;
+      background: #222228;
+      border-radius: 10px;
+      color: #a8a8b3;
+      margin-left: 8px;
+    }
+
     /* MusicBrainz Styles */
     .btn-musicbrainz {
       background: linear-gradient(135deg, #7928ca, #4338ca);
@@ -377,6 +558,49 @@
         <button id="btnToggleMusicBrainz" class="btn-musicbrainz" onclick="toggleMusicBrainzSection()">🧠 MusicBrainz Release Years</button>
       </div>
 
+      <!-- Last.fm Throttle Settings Bar -->
+      <div class="throttle-bar">
+        <span class="throttle-label">⏱️ Last.fm Request Throttle:</span>
+        <select id="throttleSelect" class="throttle-select" onchange="handleThrottleSelectChange(this.value)">
+          <option value="2000">0.5 req/sec (2.0s delay - Safe & Gentle)</option>
+          <option value="1500">0.67 req/sec (1.5s delay - Slower)</option>
+          <option value="1000" selected>1.0 req/sec (1.0s delay - Recommended)</option>
+          <option value="500">2.0 req/sec (500ms delay - Faster)</option>
+          <option value="200">5.0 req/sec (200ms delay - Maximum)</option>
+          <option value="custom">Custom delay...</option>
+        </select>
+        <div id="customThrottleWrap" style="display: none; align-items: center; gap: 5px;">
+          <input type="number" id="customThrottleInput" class="custom-throttle-input" min="100" max="10000" step="100" placeholder="ms">
+          <button class="btn-secondary btn-small" type="button" onclick="applyCustomThrottle()">Set</button>
+        </div>
+        <span id="throttleBadge" class="throttle-badge">1.0s / req</span>
+      </div>
+
+      <!-- Network / Download Error Alert Banner -->
+      <div id="downloadErrorAlert" class="download-error-alert" style="display: none;">
+        <div class="error-alert-header">
+          <div class="error-alert-title">
+            <span class="error-icon">⚠️</span>
+            <strong id="errorAlertTitle">Last.fm Download Error</strong>
+          </div>
+          <button class="btn-close-error" onclick="dismissDownloadError()" title="Dismiss">✕</button>
+        </div>
+        <div id="errorAlertBody" class="error-alert-body">
+          An error occurred while communicating with Last.fm.
+        </div>
+        <div class="error-alert-meta">
+          <span id="errorPagePill" class="error-pill">Page --</span>
+          <span id="errorCodePill" class="error-pill">NETWORK_ERROR</span>
+          <span id="errorTimePill" class="error-pill">--:--:--</span>
+        </div>
+        <div class="error-alert-actions">
+          <button id="btnErrorResume" class="btn-warning btn-small" onclick="downloadAll({ resume: true })">
+            🔄 Resume Download
+          </button>
+          <button class="btn-secondary btn-small" onclick="dismissDownloadError()">Dismiss</button>
+        </div>
+      </div>
+
       <!-- Partial download notification banner -->
       <div id="resumeBanner" class="resume-banner" style="display: none;">
         <div class="resume-text" id="resumeText">
@@ -399,12 +623,27 @@
         </div>
         <div class="progress-details">
           <span id="progressDetails">Preparing download...</span>
+          <span id="progressThrottle">⏱️ 1.0s delay</span>
           <span id="progressSaveIndicator">💾 Incremental disk sync</span>
         </div>
         <div class="progress-controls">
           <button id="btnPause" class="btn-secondary btn-small" onclick="pauseDownload()">Pause Download</button>
         </div>
       </div>
+
+      <!-- Collapsible Live Activity / Network Log -->
+      <details id="downloadLogDetails" class="activity-log-details">
+        <summary class="activity-log-summary">
+          <span>📋 Live Download & Network Log</span>
+          <span id="logCounter" class="log-count">0 events</span>
+        </summary>
+        <div class="activity-log-container">
+          <div class="activity-log-actions">
+            <button class="btn-secondary btn-small" type="button" onclick="clearActivityLog()">Clear Log</button>
+          </div>
+          <div id="activityLog" class="activity-log"></div>
+        </div>
+      </details>
 
       <div id="status" class="status"></div>
     </div>

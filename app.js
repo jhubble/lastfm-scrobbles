@@ -19,6 +19,59 @@ const question = (query) => new Promise((resolve) => rl.question(query, resolve)
 // Helper: Delay to respect API rate limits
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Throttling state: default to 1000ms (1 req/sec) or configured LASTFM_THROTTLE_MS
+const THROTTLE_MS = Math.max(100, parseInt(process.env.LASTFM_THROTTLE_MS || '1000', 10));
+let lastRequestTime = 0;
+
+async function waitForThrottle(ms = THROTTLE_MS) {
+    const now = Date.now();
+    const elapsed = now - lastRequestTime;
+    if (elapsed < ms) {
+        await sleep(ms - elapsed);
+    }
+    lastRequestTime = Date.now();
+}
+
+// Extract specific network error diagnostics from error chain
+function extractNetworkErrorDetails(err) {
+    const codes = [];
+    const messages = [];
+    let curr = err;
+    let depth = 0;
+
+    while (curr && depth < 5) {
+        if (curr.code && !codes.includes(curr.code)) codes.push(curr.code);
+        if (curr.name && curr.name !== 'TypeError' && curr.name !== 'Error' && !codes.includes(curr.name)) {
+            codes.push(curr.name);
+        }
+        if (curr.syscall && !codes.includes(`syscall:${curr.syscall}`)) {
+            codes.push(`syscall:${curr.syscall}`);
+        }
+        if (curr.message && curr.message !== 'fetch failed' && !messages.includes(curr.message)) {
+            messages.push(curr.message);
+        }
+        curr = curr.cause;
+        depth++;
+    }
+
+    const codeStr = codes.join(' / ');
+    const rawMsg = messages.join('; ') || err.message;
+    const lower = `${codeStr} ${rawMsg}`.toLowerCase();
+
+    let friendly = 'Network Connection Error';
+    if (lower.includes('etimedout') || lower.includes('und_err_connect_timeout') || lower.includes('timeout')) {
+        friendly = 'Connection Timeout (Last.fm took too long to respond)';
+    } else if (lower.includes('econnreset') || lower.includes('socket hung up')) {
+        friendly = 'Connection Reset (connection was abruptly dropped by Last.fm)';
+    } else if (lower.includes('econnrefused')) {
+        friendly = 'Connection Refused (Last.fm rejected connection)';
+    } else if (lower.includes('enotfound') || lower.includes('eai_again')) {
+        friendly = 'DNS Lookup Failed (check internet connection)';
+    }
+
+    return `${friendly}${codeStr ? ` [Code: ${codeStr}]` : ''}${rawMsg ? ` - ${rawMsg}` : ''}`;
+}
+
 // Helper: Get filename for user data
 const getFilename = (username) => `${username.toLowerCase()}_scrobbles.json`;
 const getProgressFilename = (username) => `${username.toLowerCase()}_download_progress.json`;
@@ -68,20 +121,70 @@ const saveLocalData = (username, scrobbles) => {
     console.log(`Saved ${uniqueScrobbles.length} scrobbles to ${filename}`);
 };
 
-// Fetch a single page from Last.fm API
-const fetchPage = async (username, page, limit = 200) => {
+// Fetch a single page from Last.fm API with throttling, timeout, and network diagnostics
+const fetchPage = async (username, page, limit = 200, maxRetries = 3) => {
     const url = `${BASE_URL}?method=user.getRecentTracks&user=${encodeURIComponent(username)}&api_key=${API_KEY}&format=json&page=${page}&limit=${limit}`;
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-        if (data.error) {
-            throw new Error(data.message);
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        await waitForThrottle();
+
+        const startTime = Date.now();
+        let response;
+        try {
+            response = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined });
+        } catch (err) {
+            const diag = extractNetworkErrorDetails(err);
+            const duration = Date.now() - startTime;
+            if (attempt < maxRetries) {
+                const waitMs = Math.min(10000, 2000 * Math.pow(1.5, attempt));
+                console.warn(`\n[WARN] Network error on page ${page} (${duration}ms): ${diag}. Retrying attempt ${attempt + 1}/${maxRetries} in ${(waitMs / 1000).toFixed(1)}s...`);
+                await sleep(waitMs);
+                continue;
+            }
+            console.error(`\n[ERROR] Network failure fetching page ${page} after ${attempt + 1} attempts (${duration}ms): ${diag}`);
+            return null;
         }
+
+        const duration = Date.now() - startTime;
+        let bodyText = '';
+        let data = null;
+
+        try {
+            bodyText = await response.text();
+            if (bodyText.trim().startsWith('{')) {
+                data = JSON.parse(bodyText);
+            }
+        } catch (parseErr) {
+            console.warn(`\n[WARN] Could not parse JSON response on page ${page} (HTTP ${response.status})`);
+        }
+
+        if (!response.ok) {
+            const isTransient = response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504;
+            const msg = data?.message || (bodyText.length > 120 ? bodyText.slice(0, 120) : bodyText);
+            if (isTransient && attempt < maxRetries) {
+                const waitMs = 2000 * (attempt + 1);
+                console.warn(`\n[WARN] HTTP ${response.status} on page ${page} (${msg || 'server busy'}). Retrying in ${(waitMs / 1000).toFixed(1)}s...`);
+                await sleep(waitMs);
+                continue;
+            }
+            console.error(`\n[ERROR] Last.fm returned HTTP ${response.status} on page ${page}: ${msg}`);
+            return null;
+        }
+
+        if (data && data.error) {
+            console.error(`\n[ERROR] Last.fm API error on page ${page} [Code ${data.error}]: ${data.message}`);
+            return null;
+        }
+
+        if (!data || !data.recenttracks) {
+            console.error(`\n[ERROR] Unexpected response format on page ${page}`);
+            return null;
+        }
+
         return data.recenttracks;
-    } catch (err) {
-        console.error(`Error fetching page ${page}:`, err.message);
-        return null;
     }
+
+    return null;
 };
 
 // --- FUNCTION 1: Download ALL scrobbles (with incremental saves and resume) ---
@@ -170,8 +273,8 @@ async function downloadAllScrobbles(username) {
             updatedAt: new Date().toISOString()
         });
 
-        // Be nice to Last.fm API limits
-        await sleep(250);
+        // Throttled delay to respect Last.fm rate limits
+        await waitForThrottle();
     }
 
     console.log(`\nDownload complete! Total valid scrobbles fetched: ${localScrobbles.length}`);
@@ -218,7 +321,7 @@ async function fetchNewerScrobbles(username) {
         }
 
         page++;
-        await sleep(250);
+        await waitForThrottle();
     }
 
     if (newTracksFound.length > 0) {
