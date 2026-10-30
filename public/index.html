@@ -195,6 +195,172 @@
       justify-content: space-between;
       gap: 10px;
     }
+
+    /* MusicBrainz Styles */
+    .btn-musicbrainz {
+      background: linear-gradient(135deg, #7928ca, #4338ca);
+      border: 1px solid #9061f9;
+      color: #fff;
+    }
+    .btn-musicbrainz:hover {
+      background: linear-gradient(135deg, #6b21a8, #3730a3);
+    }
+    .mb-card {
+      border: 1px solid #581c87;
+      background: #191622;
+      box-shadow: 0 4px 14px rgba(121, 40, 202, 0.15);
+    }
+    .mb-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .mb-title {
+      font-size: 20px;
+      font-weight: bold;
+      color: #c084fc;
+      margin: 0 0 5px 0;
+    }
+    .mb-subtitle {
+      font-size: 13px;
+      color: #a8a8b3;
+      margin: 0;
+      line-height: 1.4;
+      max-width: 700px;
+    }
+    .mb-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .mb-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: #2e1065;
+      color: #e9d5ff;
+      border: 1px solid #6b21a8;
+    }
+    .mb-stat-box {
+      background: #231e34;
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid #3b2d54;
+      text-align: center;
+    }
+    .mb-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 15px 0 10px 0;
+      align-items: center;
+    }
+    .mb-select {
+      background: #121214;
+      border: 1px solid #3b2d54;
+      color: #fff;
+      padding: 9px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .mb-select:focus {
+      outline: none;
+      border-color: #9061f9;
+    }
+    .mb-table-wrapper {
+      max-height: 480px;
+      overflow-y: auto;
+      overflow-x: auto;
+      border: 1px solid #323238;
+      border-radius: 6px;
+      margin-top: 10px;
+      background: #121214;
+    }
+    .mb-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .mb-table th {
+      background: #231e34;
+      color: #d8b4fe;
+      text-align: left;
+      padding: 10px 12px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      border-bottom: 2px solid #3b2d54;
+      white-space: nowrap;
+    }
+    .mb-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid #29292e;
+      vertical-align: middle;
+    }
+    .mb-table tr:hover {
+      background: #1f1b2e;
+    }
+    .tag-later {
+      background: #78350f;
+      color: #fef08a;
+      border: 1px solid #d97706;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      display: inline-block;
+      margin-top: 2px;
+    }
+    .tag-original {
+      background: #064e3b;
+      color: #a7f3d0;
+      border: 1px solid #059669;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      display: inline-block;
+      margin-top: 2px;
+    }
+    .tag-pending {
+      background: #27272a;
+      color: #a1a1aa;
+      border: 1px solid #3f3f46;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      display: inline-block;
+    }
+    .tag-notfound {
+      background: #374151;
+      color: #9ca3af;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      display: inline-block;
+    }
+    .mb-pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #a8a8b3;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .mb-link {
+      color: #c084fc;
+      text-decoration: none;
+    }
+    .mb-link:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -208,6 +374,7 @@
         <button id="btnDownload" onclick="downloadAll({ resume: true })">Download All</button>
         <button id="btnSync" onclick="syncNewer()">Fetch Newer</button>
         <button id="btnRestart" class="btn-secondary" onclick="restartDownload()" style="display: none;">Restart From Beginning</button>
+        <button id="btnToggleMusicBrainz" class="btn-musicbrainz" onclick="toggleMusicBrainzSection()">🧠 MusicBrainz Release Years</button>
       </div>
 
       <!-- Partial download notification banner -->
@@ -240,6 +407,121 @@
       </div>
 
       <div id="status" class="status"></div>
+    </div>
+
+    <!-- MusicBrainz Section (Self-contained) -->
+    <div id="musicbrainzSection" class="card mb-card" style="display: none; margin-top: 20px;">
+      <div class="mb-header">
+        <div>
+          <h2 class="mb-title">🧠 MusicBrainz Release Year Analyzer</h2>
+          <p class="mb-subtitle">
+            Look up details for each song scrobbled (first scrobble only). Identifies the original release date and earliest year from MusicBrainz, and detects remasters or songs appearing on later compilations (e.g. Greatest Hits).
+          </p>
+          <div class="mb-badges">
+            <span class="mb-pill">⏱️ Rate Limit: 1 req/sec</span>
+            <span class="mb-pill">💾 Local Storage</span>
+            <span class="mb-pill">🔄 Incremental Sync</span>
+            <span class="mb-pill" id="mbUaIndicator">👤 User-Agent Provided</span>
+          </div>
+        </div>
+        <div>
+          <button class="btn-secondary btn-small" onclick="toggleMusicBrainzSection(false)">✕ Close Section</button>
+        </div>
+      </div>
+
+      <!-- MusicBrainz Statistics Overview -->
+      <div class="grid" style="margin-bottom: 15px;">
+        <div class="mb-stat-box">Unique Songs<div class="stat-val" id="mbStatTotal">-</div></div>
+        <div class="mb-stat-box">Enriched<div class="stat-val" id="mbStatEnriched">-</div></div>
+        <div class="mb-stat-box">Earliest Year in Library<div class="stat-val" style="color: #c084fc;" id="mbStatOldestYear">-</div></div>
+        <div class="mb-stat-box">Later Works / Remasters<div class="stat-val" style="color: #f59e0b;" id="mbStatLaterCount">-</div></div>
+      </div>
+
+      <!-- Controls Row -->
+      <div class="controls" style="align-items: center;">
+        <button id="btnMbStart" class="btn-musicbrainz" onclick="startMusicBrainz()">▶ Start / Resume Enrichment</button>
+        <button id="btnMbPause" class="btn-secondary" onclick="pauseMusicBrainz()" style="display: none;">⏸ Pause</button>
+        <button id="btnMbRestart" class="btn-warning btn-small" onclick="restartMusicBrainz()" style="display: none;">Restart All</button>
+        <button class="btn-secondary btn-small" onclick="refreshMusicBrainzView()">↻ Refresh View</button>
+        <span id="mbStatus" class="status" style="margin: 0; margin-left: 10px;">Ready</span>
+      </div>
+
+      <!-- Live MusicBrainz Progress Box -->
+      <div id="mbProgressBox" class="progress-box" style="display: none; border-color: #581c87; background: #130f1c;">
+        <div class="progress-header">
+          <span class="progress-title" id="mbProgressTitle">Enriching songs with MusicBrainz...</span>
+          <span class="progress-badge" id="mbProgressBadge" style="background: #9061f9;">0%</span>
+        </div>
+        <div class="progress-bar-bg" style="background: #231e34;">
+          <div id="mbProgressBarFill" class="progress-bar-fill" style="background: linear-gradient(90deg, #9061f9, #c084fc);"></div>
+        </div>
+        <div class="progress-details">
+          <span id="mbProgressDetails">Preparing lookup...</span>
+          <span id="mbRateIndicator">⚡ 1 req / 1.1s (compliant rate)</span>
+        </div>
+      </div>
+
+      <!-- Filter / Search Toolbar -->
+      <div class="mb-toolbar">
+        <input type="text" id="mbSearch" placeholder="🔍 Search by song, artist, or album..." style="min-width: 220px;" oninput="onMbSearchInput(this.value)">
+        
+        <select id="mbFilter" class="mb-select" onchange="onMbFilterChange(this.value)">
+          <option value="all">All Unique Songs</option>
+          <option value="later_releases">⚠️ Later Works &amp; Remasters Only (Earliest &lt; Scrobbled)</option>
+          <option value="found">✓ Enriched in MusicBrainz</option>
+          <option value="pending">⏳ Pending Lookups</option>
+          <option value="not_found">✕ Not Found in MusicBrainz</option>
+        </select>
+
+        <select id="mbSort" class="mb-select" onchange="onMbSortChange(this.value)">
+          <option value="firstScrobbledAsc">First Scrobbled (Earliest first)</option>
+          <option value="firstScrobbledDesc">First Scrobbled (Latest first)</option>
+          <option value="earliestYearAsc">Earliest Release Year (Oldest first)</option>
+          <option value="earliestYearDesc">Earliest Release Year (Newest first)</option>
+          <option value="yearDiffDesc">Year Difference (Largest gap first)</option>
+          <option value="playCountDesc">Play Count (Most scrobbled)</option>
+          <option value="artistAsc">Artist Name (A-Z)</option>
+          <option value="titleAsc">Song Title (A-Z)</option>
+        </select>
+
+        <select id="mbLimit" class="mb-select" style="width: auto;" onchange="onMbLimitChange(this.value)">
+          <option value="25">25 / page</option>
+          <option value="50" selected>50 / page</option>
+          <option value="100">100 / page</option>
+        </select>
+      </div>
+
+      <!-- Songs Table -->
+      <div class="mb-table-wrapper">
+        <table class="mb-table">
+          <thead>
+            <tr>
+              <th style="width: 28%;">Song &amp; Artist</th>
+              <th style="width: 22%;">First Scrobbled</th>
+              <th style="width: 14%;">Scrobbled Release</th>
+              <th style="width: 20%;">Earliest Release Year</th>
+              <th style="width: 16%;">MusicBrainz Status</th>
+            </tr>
+          </thead>
+          <tbody id="mbTableBody">
+            <tr>
+              <td colspan="5" style="text-align: center; color: #888; padding: 25px;">
+                Enter a username and click "Start / Resume Enrichment" or load songs to view details.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination Footer -->
+      <div class="mb-pagination">
+        <span id="mbPaginationInfo">Showing 0 of 0 songs</span>
+        <div style="display: flex; gap: 8px;">
+          <button id="btnMbPrev" class="btn-secondary btn-small" onclick="changeMbPage(-1)" disabled>◀ Previous</button>
+          <span id="mbPageIndicator" style="line-height: 28px; padding: 0 6px;">Page 1 of 1</span>
+          <button id="btnMbNext" class="btn-secondary btn-small" onclick="changeMbPage(1)" disabled>Next ▶</button>
+        </div>
+      </div>
     </div>
 
     <div class="grid" id="statsGrid">

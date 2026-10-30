@@ -3,6 +3,15 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import {
+  initMusicBrainz,
+  getMusicBrainzStatus,
+  getMusicBrainzData,
+  startMusicBrainzJob,
+  pauseMusicBrainzJob,
+  registerMbSseClient,
+  removeMbSseClient,
+} from './musicbrainz.js';
 
 dotenv.config();
 
@@ -96,6 +105,7 @@ app.get('/', (req, res) => {
 // Ensure data directory exists
 try {
   await fs.mkdir(DATA_DIR, { recursive: true });
+  initMusicBrainz({ dataDir: DATA_DIR, logger });
   logger.info('Storage', `Data directory initialized at ${DATA_DIR}`);
 } catch (err) {
   logger.error('Storage', `Failed to initialize data directory: ${err.message}`, err);
@@ -627,6 +637,105 @@ app.get('/api/scrobbles/:username', async (req, res, next) => {
     });
   } catch (err) {
     logger.error('Stats', `Failed computing stats for "${username}": ${err.message}`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- MusicBrainz Enrichment API Routes ---
+
+// API: MusicBrainz Status & Summary Stats
+app.get('/api/musicbrainz/status/:username', async (req, res, next) => {
+  const username = req.params.username?.trim();
+  if (!username) {
+    return res.status(400).json({ error: 'Username is required' });
+  }
+
+  try {
+    const statusData = await getMusicBrainzStatus(username);
+    res.json(statusData);
+  } catch (err) {
+    logger.error('MusicBrainz', `Failed fetching status for "${username}": ${err.message}`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: MusicBrainz Real-time SSE Progress Stream
+app.get('/api/musicbrainz/stream', async (req, res) => {
+  const username = req.query.username;
+  if (!username) {
+    return res.status(400).send('Query parameter "username" is required');
+  }
+
+  const key = username.toLowerCase().trim();
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  registerMbSseClient(key, res);
+
+  try {
+    const currentStatus = await getMusicBrainzStatus(key);
+    res.write(`event: mb-status\ndata: ${JSON.stringify(currentStatus)}\n\n`);
+  } catch (err) {
+    logger.warn('MusicBrainzSSE', `Error sending initial SSE status: ${err.message}`);
+  }
+
+  req.on('close', () => {
+    removeMbSseClient(key, res);
+  });
+});
+
+// API: MusicBrainz Paginated & Filtered Data
+app.get('/api/musicbrainz/data/:username', async (req, res, next) => {
+  const username = req.params.username?.trim();
+  if (!username) {
+    return res.status(400).json({ error: 'Username is required' });
+  }
+
+  try {
+    const data = await getMusicBrainzData(username, req.query);
+    res.json(data);
+  } catch (err) {
+    logger.error('MusicBrainz', `Failed fetching MB data for "${username}": ${err.message}`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Start or Resume MusicBrainz Lookup Job
+app.post('/api/musicbrainz/start', async (req, res, next) => {
+  const { username, restart = false } = req.body;
+  if (!username) {
+    return res.status(400).json({ error: 'Username is required' });
+  }
+
+  try {
+    const result = await startMusicBrainzJob(username, { restart });
+    res.json({
+      message: result.alreadyRunning
+        ? 'MusicBrainz lookup is already running'
+        : 'MusicBrainz enrichment started',
+      ...result,
+    });
+  } catch (err) {
+    logger.error('MusicBrainz', `Failed starting MB job for "${username}": ${err.message}`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Pause MusicBrainz Lookup Job
+app.post('/api/musicbrainz/pause', async (req, res, next) => {
+  const { username } = req.body;
+  if (!username) {
+    return res.status(400).json({ error: 'Username is required' });
+  }
+
+  try {
+    const result = pauseMusicBrainzJob(username);
+    res.json(result);
+  } catch (err) {
+    logger.error('MusicBrainz', `Failed pausing MB job for "${username}": ${err.message}`, err);
     res.status(500).json({ error: err.message });
   }
 });
