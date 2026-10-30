@@ -38,16 +38,6 @@ function clearActivityLog() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const btnFetch = document.getElementById('btnFetch');
-  if (btnFetch) btnFetch.addEventListener('click', () => fetchLocalData());
-  const btnDownload = document.getElementById('btnDownload');
-  if (btnDownload) btnDownload.addEventListener('click', () => downloadAll({ resume: true }));
-  const btnSync = document.getElementById('btnSync');
-  if (btnSync) btnSync.addEventListener('click', () => syncNewer());
-  const btnRestart = document.getElementById('btnRestart');
-  if (btnRestart) btnRestart.addEventListener('click', () => restartDownload());
-  const btnPause = document.getElementById('btnPause');
-  if (btnPause) btnPause.addEventListener('click', () => pauseDownload());
   // Global error handler
   window.addEventListener('error', e => {
     console.error('Global error caught:', e.error);
@@ -136,6 +126,20 @@ function showDownloadError(errorData) {
   const codePill = document.getElementById('errorCodePill');
   const timePill = document.getElementById('errorTimePill');
   const btnResume = document.getElementById('btnErrorResume');
+
+  // Keep the complete server/browser error payload in DevTools, even when the
+  // UI only displays a short description.
+  const consoleDetails = {
+    timestamp: new Date().toISOString(),
+    ...errorData,
+  };
+  let consoleDetailsText;
+  try {
+    consoleDetailsText = JSON.stringify(consoleDetails, null, 2);
+  } catch (err) {
+    consoleDetailsText = String(errorData?.errorDescription || errorData?.error || errorData?.message || err);
+  }
+  console.error(`[Download Error]\n${consoleDetailsText}`);
 
   if (!alertBox) return;
 
@@ -431,8 +435,32 @@ async function downloadAll(options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, restart, throttleMs })
     });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    const responseText = await res.text();
+    let data;
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      const error = new Error(`Download request returned non-JSON response (HTTP ${res.status}): ${responseText.slice(0, 1000)}`);
+      error.details = {
+        httpStatus: res.status,
+        statusText: res.statusText,
+        contentType: res.headers.get('content-type'),
+        responseBody: responseText.slice(0, 1000),
+        parseError: parseError.message,
+        request: { username, restart, throttleMs },
+      };
+      throw error;
+    }
+    if (!res.ok || data.error) {
+      const error = new Error(data.errorDescription || data.description || data.error || `Request failed with HTTP ${res.status}`);
+      error.details = {
+        httpStatus: res.status,
+        statusText: res.statusText,
+        response: data,
+        request: { username, restart, throttleMs },
+      };
+      throw error;
+    }
 
     setStatus(data.message || 'Download in progress...');
     connectProgressStream(username);
@@ -440,7 +468,9 @@ async function downloadAll(options = {}) {
     showDownloadError({
       errorCategory: 'Download Initiation Error',
       errorDescription: err.message,
-      errorCode: 'INIT_ERROR'
+      errorCode: 'INIT_ERROR',
+      ...(err.details || {}),
+      stack: err.stack,
     });
     setStatus('Error starting download: ' + err.message);
     addActivityLog(`❌ Error starting download: ${err.message}`, 'error');
@@ -469,9 +499,24 @@ async function pauseDownload() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username })
     });
-    const data = await res.json();
+    const responseText = await res.text();
+    let data;
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      throw new Error(`Pause request returned non-JSON response (HTTP ${res.status}): ${responseText.slice(0, 1000)}; ${parseError.message}`);
+    }
+    if (!res.ok || data.error) {
+      throw new Error(data.errorDescription || data.error || `Pause request failed with HTTP ${res.status}`);
+    }
     setStatus(data.message || 'Pause requested');
   } catch (err) {
+    console.error('[Download Pause Error]', {
+      timestamp: new Date().toISOString(),
+      username,
+      message: err.message,
+      stack: err.stack,
+    });
     setStatus('Error pausing download: ' + err.message);
   }
 }
