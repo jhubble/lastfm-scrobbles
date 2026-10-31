@@ -1151,6 +1151,22 @@ function escapeHtml(str) {
 
 // Initial initialization on page load
 document.addEventListener('DOMContentLoaded', async () => {
+  // Pre-fill the optional server-configured account without initiating a Last.fm request.
+  const usernameInput = document.getElementById('username');
+  if (usernameInput && !usernameInput.value.trim()) {
+    try {
+      const configResponse = await fetch('/api/config');
+      if (configResponse.ok) {
+        const config = await configResponse.json();
+        if (!usernameInput.value.trim() && config.defaultLastFmUsername) {
+          usernameInput.value = config.defaultLastFmUsername;
+        }
+      }
+    } catch (err) {
+      console.debug('Could not load default Last.fm username');
+    }
+  }
+
   loadMusicBrainzThrottle();
   // Restore saved throttle preference or fetch from server
   const savedThrottle = localStorage.getItem('lastfm_throttle_ms');

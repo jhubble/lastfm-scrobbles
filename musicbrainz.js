@@ -263,9 +263,13 @@ export function extractUniqueSongsFromScrobbles(scrobbles) {
     }
   }
 
-  // Convert to array and sort by firstScrobbledUts (chronological order of discovery)
+  // Prioritize tracks with the most scrobbles; break ties by first discovery.
   const list = Array.from(songMap.values());
-  list.sort((a, b) => a.firstScrobbledUts - b.firstScrobbledUts);
+  list.sort((a, b) =>
+    (b.scrobbleCount - a.scrobbleCount) ||
+    (a.firstScrobbledUts - b.firstScrobbledUts) ||
+    a.songKey.localeCompare(b.songKey)
+  );
   return list;
 }
 

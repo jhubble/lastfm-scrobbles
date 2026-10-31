@@ -176,6 +176,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+// This endpoint exposes only a non-secret convenience setting to the UI.
+app.get('/api/config', (req, res) => {
+  res.json({ defaultLastFmUsername: process.env.LASTFM_USERNAME || '' });
+});
 app.use(express.static(PUBLIC_DIR));
 
 // Explicit route for root serving index.html
