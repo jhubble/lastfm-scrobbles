@@ -686,6 +686,10 @@ async function fetchMusicBrainzStatus() {
     const stEnriched = document.getElementById('mbStatEnriched');
     const stOldest = document.getElementById('mbStatOldestYear');
     const stLater = document.getElementById('mbStatLaterCount');
+    const stAudiobooks = document.getElementById('mbStatAudiobooks');
+    const stClassification = document.getElementById('mbStatClassification');
+    const stToLookup = document.getElementById('mbStatToLookup');
+    const stRemaining = document.getElementById('mbStatRemaining');
     const btnRestart = document.getElementById('btnMbRestart');
 
     if (stTotal) stTotal.innerText = (data.stats.totalUniqueSongs || 0).toLocaleString();
@@ -694,6 +698,27 @@ async function fetchMusicBrainzStatus() {
     }
     if (stOldest) stOldest.innerText = data.stats.oldestReleaseYear || '-';
     if (stLater) stLater.innerText = (data.stats.laterReleaseCount || 0).toLocaleString();
+    if (stAudiobooks) stAudiobooks.innerText = (data.stats.audiobookCount || 0).toLocaleString();
+    if (stClassification) stClassification.innerText = `${(data.stats.musicCount || 0).toLocaleString()} music · ${(data.stats.unknownClassificationCount || 0).toLocaleString()} unknown`;
+    const hasResumableQueue = data.isRunning || data.status === 'paused';
+    const toLookup = hasResumableQueue ? data.progress?.totalToLookup ?? data.stats.pendingSongs ?? 0 : data.stats.pendingSongs ?? 0;
+    const remaining = hasResumableQueue ? data.progress?.remainingCount ?? data.stats.pendingSongs ?? 0 : data.stats.pendingSongs ?? 0;
+    if (stToLookup) stToLookup.innerText = toLookup.toLocaleString();
+    if (stRemaining) stRemaining.innerText = remaining.toLocaleString();
+
+    const progress = data.progress || {};
+    const hasSavedProgress = data.isRunning || data.status === 'paused' || (progress.remainingCount > 0 && progress.processedCount > 0);
+    const progressBox = document.getElementById('mbProgressBox');
+    if (progressBox && hasSavedProgress) {
+      progressBox.style.display = 'block';
+      const percent = Math.min(100, Math.max(0, progress.percent || 0));
+      document.getElementById('mbProgressBadge').innerText = `${percent}%`;
+      document.getElementById('mbProgressBarFill').style.width = `${percent}%`;
+      document.getElementById('mbProgressTitle').innerText = progress.currentSong
+        ? `Looking up: ${progress.currentSong.artist} - ${progress.currentSong.title}`
+        : progress.message || 'MusicBrainz progress saved';
+      document.getElementById('mbProgressDetails').innerText = `${toLookup.toLocaleString()} items to look up · ${remaining.toLocaleString()} remaining`;
+    }
 
     if (btnRestart) {
       btnRestart.style.display = (data.stats.processedSongs > 0) ? 'inline-block' : 'none';
@@ -704,10 +729,55 @@ async function fetchMusicBrainzStatus() {
       connectMusicBrainzStream(username);
     } else {
       setMbButtonsBusy(false);
-      setMbStatus(data.progress?.message || 'Ready');
+      setMbStatus(data.status === 'paused' ? data.progress?.message || 'Stopped with progress saved. Resume when ready.' : data.progress?.message || 'Ready');
     }
   } catch (err) {
     console.warn('Error fetching MusicBrainz status:', err.message);
+  }
+}
+
+function displayMusicBrainzThrottle(throttleMs) {
+  const select = document.getElementById('mbThrottle');
+  if (select) {
+    if (![...select.options].some(option => Number(option.value) === Number(throttleMs))) {
+      const custom = document.createElement('option');
+      custom.value = String(throttleMs);
+      custom.textContent = `${(Number(throttleMs) / 1000).toFixed(1)} seconds`;
+      select.insertBefore(custom, select.firstChild);
+    }
+    select.value = String(throttleMs);
+  }
+  const indicator = document.getElementById('mbRateIndicator');
+  if (indicator) indicator.textContent = `⚡ 1 request / ${(Number(throttleMs) / 1000).toFixed(1)}s`;
+}
+
+async function loadMusicBrainzThrottle() {
+  try {
+    const response = await fetch('/api/musicbrainz/throttle');
+    if (response.ok) displayMusicBrainzThrottle((await response.json()).throttleMs);
+  } catch (error) {
+    console.warn('Could not load MusicBrainz request interval:', error.message);
+  }
+}
+
+async function updateMusicBrainzThrottle(value) {
+  const select = document.getElementById('mbThrottle');
+  if (!select) return;
+  select.disabled = true;
+  try {
+    const response = await fetch('/api/musicbrainz/throttle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ throttleMs: Number(value) }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save request interval.');
+    displayMusicBrainzThrottle(data.throttleMs);
+    setMbStatus(`MusicBrainz request interval saved: ${(data.throttleMs / 1000).toFixed(1)} seconds.`);
+  } catch (error) {
+    setMbStatus(`Could not change request interval: ${error.message}`);
+    await loadMusicBrainzThrottle();
+  } finally {
+    select.disabled = false;
   }
 }
 
@@ -718,7 +788,7 @@ async function loadMusicBrainzTable(page = 1) {
   mbCurrentPage = page;
   const tbody = document.getElementById('mbTableBody');
   if (tbody) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #a8a8b3; padding: 25px;">Loading songs...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #a8a8b3; padding: 25px;">Loading songs...</td></tr>`;
   }
 
   try {
@@ -741,7 +811,7 @@ async function loadMusicBrainzTable(page = 1) {
     updateMbPagination(totalItems);
   } catch (err) {
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #f87171; padding: 25px;">Error loading data: ${err.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #f87171; padding: 25px;">Error loading data: ${err.message}</td></tr>`;
     }
   }
 }
@@ -751,7 +821,7 @@ function renderMusicBrainzRows(items) {
   if (!tbody) return;
 
   if (!items || items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #a8a8b3; padding: 30px;">No songs match the current filter or search criteria.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #a8a8b3; padding: 30px;">No songs match the current filter or search criteria.</td></tr>`;
     return;
   }
 
@@ -837,11 +907,18 @@ function renderMusicBrainzRows(items) {
       </div>
     `;
 
+    const classification = item.musicbrainzCategory || 'unknown';
+    const mbTypes = item.musicbrainzTypes || { primary: [], secondary: [] };
+    const typeSummary = [...(mbTypes.primary || []), ...(mbTypes.secondary || [])].join(', ');
+    const classificationLabel = classification === 'audiobook' ? '📚 Audiobook' : classification === 'music' ? '🎵 Music' : 'Unknown';
+    const classificationColor = classification === 'audiobook' ? '#c084fc' : classification === 'music' ? '#4ade80' : '#a8a8b3';
+
     tr.innerHTML = `
       <td>${songCell}</td>
       <td>${firstCell}</td>
       <td>${scrobCell}</td>
       <td>${earliestCell}</td>
+      <td><span style="color: ${classificationColor};" title="${escapeHtml(typeSummary || 'No release-group type data')}">${classificationLabel}</span></td>
       <td>${statusCell}</td>
     `;
     tbody.appendChild(tr);
@@ -927,7 +1004,9 @@ function connectMusicBrainzStream(username) {
         : data.message || 'Enriching songs with MusicBrainz...';
     }
     if (progressDetails) {
-      progressDetails.innerText = `Processed ${data.processedCount || 0} of ${data.totalUniqueSongs || 0} unique songs (${percent}%)`;
+      const queued = data.totalToLookup ?? data.totalUniqueSongs ?? 0;
+      const remaining = data.remainingCount ?? Math.max(0, queued - (data.processedCount || 0));
+      progressDetails.innerText = `${queued.toLocaleString()} items to look up · ${remaining.toLocaleString()} remaining · ${percent}% of library`;
     }
     setMbStatus(data.message || 'Enrichment running...');
   };
@@ -936,6 +1015,14 @@ function connectMusicBrainzStream(username) {
     try {
       const data = JSON.parse(e.data);
       if (data.progress) handleProgress(data.progress);
+      if (data.status && data.status !== 'running') {
+        setMbButtonsBusy(false);
+        if (data.status === 'paused') setMbStatus(data.progress?.message || 'Stopped with progress saved. Resume when ready.');
+        if (data.status === 'completed') setMbStatus(data.progress?.message || 'MusicBrainz enrichment complete.');
+        es.close();
+        if (mbEventSource === es) mbEventSource = null;
+        refreshMusicBrainzView();
+      }
     } catch {}
   });
 
@@ -1028,7 +1115,7 @@ async function pauseMusicBrainz() {
   const username = document.getElementById('username')?.value.trim();
   if (!username) return;
 
-  setMbStatus('Requesting pause...');
+  setMbStatus('Stopping MusicBrainz lookup and saving progress...');
   try {
     const res = await fetch('/api/musicbrainz/pause', {
       method: 'POST',
@@ -1036,9 +1123,9 @@ async function pauseMusicBrainz() {
       body: JSON.stringify({ username }),
     });
     const data = await res.json();
-    setMbStatus(data.message || 'Pause requested');
+    setMbStatus(data.message || 'Stop requested; saving current progress');
   } catch (err) {
-    setMbStatus(`Error pausing: ${err.message}`);
+    setMbStatus(`Error stopping: ${err.message}`);
   }
 }
 
@@ -1064,6 +1151,7 @@ function escapeHtml(str) {
 
 // Initial initialization on page load
 document.addEventListener('DOMContentLoaded', async () => {
+  loadMusicBrainzThrottle();
   // Restore saved throttle preference or fetch from server
   const savedThrottle = localStorage.getItem('lastfm_throttle_ms');
   if (savedThrottle) {

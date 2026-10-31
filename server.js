@@ -7,8 +7,12 @@ import {
   initMusicBrainz,
   getMusicBrainzStatus,
   getMusicBrainzData,
+  getMusicBrainzClassifications,
+  getMusicBrainzThrottle,
+  setMusicBrainzThrottle,
   startMusicBrainzJob,
   pauseMusicBrainzJob,
+  pauseAllMusicBrainzJobs,
   registerMbSseClient,
   removeMbSseClient,
 } from './musicbrainz.js';
@@ -100,6 +104,9 @@ async function shutdown() {
     }
   }
 
+  logger.info('Server', 'Stopping MusicBrainz enrichment and saving progress');
+  await pauseAllMusicBrainzJobs();
+
   // EventSource connections stay open for the lifetime of the page and would
   // otherwise keep server.close() waiting indefinitely.
   for (const clients of sseClients.values()) {
@@ -181,7 +188,7 @@ app.get('/', (req, res) => {
 // Ensure data directory exists
 try {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  initMusicBrainz({ dataDir: DATA_DIR, logger });
+  await initMusicBrainz({ dataDir: DATA_DIR, logger });
   logger.info('Storage', `Data directory initialized at ${DATA_DIR}`);
 } catch (err) {
   logger.error('Storage', `Failed to initialize data directory: ${err.message}`, err);
@@ -850,7 +857,11 @@ app.get('/api/scrobbles/throttle', (req, res) => {
 app.get('/api/scrobbles/:username/categories', async (req, res) => {
   try {
     const username = req.params.username.trim();
-    return res.json({ username, categories: await loadCategories(username) });
+    const [categories, musicBrainzClassifications] = await Promise.all([
+      loadCategories(username),
+      getMusicBrainzClassifications(username),
+    ]);
+    return res.json({ username, categories, musicBrainzClassifications });
   } catch (err) {
     logger.error('Categories', `Could not load local categories for ${req.params.username}: ${err.message}`, err);
     return res.status(500).json({ error: err.message });
@@ -989,6 +1000,19 @@ app.post('/api/scrobbles/download-cancel', (req, res) => {
 });
 
 // API: MusicBrainz enrichment status and paginated results.
+app.get('/api/musicbrainz/throttle', (req, res) => {
+  return res.json(getMusicBrainzThrottle());
+});
+
+app.post('/api/musicbrainz/throttle', async (req, res) => {
+  const throttleMs = Number(req.body?.throttleMs);
+  try {
+    return res.json(await setMusicBrainzThrottle(throttleMs));
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/musicbrainz/status/:username', async (req, res) => {
   try {
     return res.json(await getMusicBrainzStatus(req.params.username));

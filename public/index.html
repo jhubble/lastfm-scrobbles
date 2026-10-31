@@ -695,7 +695,7 @@
         <div>
           <h2 class="mb-title">🧠 MusicBrainz Release Year Analyzer</h2>
           <p class="mb-subtitle">
-            Look up details for each song scrobbled (first scrobble only). Identifies the original release date and earliest year from MusicBrainz, and detects remasters or songs appearing on later compilations (e.g. Greatest Hits).
+            Look up details for each unique song. Along with release dates and remaster detection, cache MusicBrainz release groups, types, artist credits, tags, and genres locally. Explicit MusicBrainz audiobook or music types classify tracks; ambiguous matches remain unknown.
           </p>
           <div class="mb-badges">
             <span class="mb-pill">⏱️ Rate Limit: 1 req/sec</span>
@@ -713,16 +713,29 @@
       <div class="grid" style="margin-bottom: 15px;">
         <div class="mb-stat-box">Unique Songs<div class="stat-val" id="mbStatTotal">-</div></div>
         <div class="mb-stat-box">Enriched<div class="stat-val" id="mbStatEnriched">-</div></div>
+        <div class="mb-stat-box">Items to Look Up<div class="stat-val" id="mbStatToLookup">-</div></div>
+        <div class="mb-stat-box">Remaining<div class="stat-val" id="mbStatRemaining">-</div></div>
         <div class="mb-stat-box">Earliest Year in Library<div class="stat-val" style="color: #c084fc;" id="mbStatOldestYear">-</div></div>
         <div class="mb-stat-box">Later Works / Remasters<div class="stat-val" style="color: #f59e0b;" id="mbStatLaterCount">-</div></div>
+        <div class="mb-stat-box">Audiobooks<div class="stat-val" style="color: #c084fc;" id="mbStatAudiobooks">-</div></div>
+        <div class="mb-stat-box">Music / Unknown<div class="stat-val" id="mbStatClassification">-</div></div>
       </div>
 
       <!-- Controls Row -->
       <div class="controls" style="align-items: center;">
         <button id="btnMbStart" class="btn-musicbrainz" onclick="startMusicBrainz()">▶ Start / Resume Enrichment</button>
-        <button id="btnMbPause" class="btn-secondary" onclick="pauseMusicBrainz()" style="display: none;">⏸ Pause</button>
+        <button id="btnMbPause" class="btn-secondary" onclick="pauseMusicBrainz()" style="display: none;">■ Stop &amp; Save</button>
         <button id="btnMbRestart" class="btn-warning btn-small" onclick="restartMusicBrainz()" style="display: none;">Restart All</button>
         <button class="btn-secondary btn-small" onclick="refreshMusicBrainzView()">↻ Refresh View</button>
+        <label for="mbThrottle" style="margin-left: 8px;">Request interval</label>
+        <select id="mbThrottle" class="mb-select" onchange="updateMusicBrainzThrottle(this.value)">
+          <option value="1100">1.1 seconds</option>
+          <option value="2000">2 seconds</option>
+          <option value="5000">5 seconds</option>
+          <option value="10000">10 seconds</option>
+          <option value="30000">30 seconds</option>
+          <option value="60000">60 seconds</option>
+        </select>
         <span id="mbStatus" class="status" style="margin: 0; margin-left: 10px;">Ready</span>
       </div>
 
@@ -751,6 +764,9 @@
           <option value="found">✓ Enriched in MusicBrainz</option>
           <option value="pending">⏳ Pending Lookups</option>
           <option value="not_found">✕ Not Found in MusicBrainz</option>
+          <option value="audiobook">📚 Classified as Audiobook</option>
+          <option value="music">🎵 Classified as Music</option>
+          <option value="classification_unknown">? Classification Unknown</option>
         </select>
 
         <select id="mbSort" class="mb-select" onchange="onMbSortChange(this.value)">
@@ -776,16 +792,17 @@
         <table class="mb-table">
           <thead>
             <tr>
-              <th style="width: 28%;">Song &amp; Artist</th>
-              <th style="width: 22%;">First Scrobbled</th>
-              <th style="width: 14%;">Scrobbled Release</th>
-              <th style="width: 20%;">Earliest Release Year</th>
-              <th style="width: 16%;">MusicBrainz Status</th>
+              <th style="width: 24%;">Song &amp; Artist</th>
+              <th style="width: 19%;">First Scrobbled</th>
+              <th style="width: 12%;">Scrobbled Release</th>
+              <th style="width: 17%;">Earliest Release Year</th>
+              <th style="width: 14%;">MB Classification</th>
+              <th style="width: 14%;">MusicBrainz Status</th>
             </tr>
           </thead>
           <tbody id="mbTableBody">
             <tr>
-              <td colspan="5" style="text-align: center; color: #888; padding: 25px;">
+              <td colspan="6" style="text-align: center; color: #888; padding: 25px;">
                 Enter a username and click "Start / Resume Enrichment" or load songs to view details.
               </td>
             </tr>

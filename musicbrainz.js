@@ -3,9 +3,11 @@ import path from 'path';
 
 // --- CONFIGURATION ---
 // MusicBrainz requests 1 request per second and a meaningful User-Agent
-const RATE_LIMIT_DELAY_MS = 1100;
 const MUSICBRAINZ_BASE_URL = 'https://musicbrainz.org/ws/2/';
 const DEFAULT_USER_AGENT = 'LastFMScrobbleManager/1.0.0 ( https://github.com/user/lastfm-scrobbles )';
+const MIN_RATE_LIMIT_DELAY_MS = 1100;
+const MAX_RATE_LIMIT_DELAY_MS = 60000;
+let rateLimitDelayMs = Math.min(MAX_RATE_LIMIT_DELAY_MS, Math.max(MIN_RATE_LIMIT_DELAY_MS, Number.parseInt(process.env.MUSICBRAINZ_THROTTLE_MS || '1100', 10) || 1100));
 
 let dataDir = null;
 let logger = console;
@@ -20,12 +22,39 @@ const sseClients = new Map();
 
 // Rate limiter state: timestamp of the last request to MusicBrainz
 let lastRequestTime = 0;
+let rateLimitQueue = Promise.resolve();
 
-export function initMusicBrainz(options = {}) {
+export async function initMusicBrainz(options = {}) {
   dataDir = options.dataDir;
   if (options.logger) {
     logger = options.logger;
   }
+  try {
+    const settings = JSON.parse(await fs.readFile(path.join(dataDir, 'musicbrainz_settings.json'), 'utf8'));
+    const savedDelay = Number(settings.throttleMs);
+    if (Number.isInteger(savedDelay) && savedDelay >= MIN_RATE_LIMIT_DELAY_MS && savedDelay <= MAX_RATE_LIMIT_DELAY_MS) {
+      rateLimitDelayMs = savedDelay;
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') logger.warn('MusicBrainz', `Could not load saved throttle setting: ${err.message}`);
+  }
+}
+
+export function getMusicBrainzThrottle() {
+  return { throttleMs: rateLimitDelayMs, minThrottleMs: MIN_RATE_LIMIT_DELAY_MS, maxThrottleMs: MAX_RATE_LIMIT_DELAY_MS };
+}
+
+export async function setMusicBrainzThrottle(throttleMs) {
+  if (!Number.isInteger(throttleMs) || throttleMs < MIN_RATE_LIMIT_DELAY_MS || throttleMs > MAX_RATE_LIMIT_DELAY_MS) {
+    throw new Error(`throttleMs must be an integer from ${MIN_RATE_LIMIT_DELAY_MS} to ${MAX_RATE_LIMIT_DELAY_MS}.`);
+  }
+  if (!dataDir) throw new Error('MusicBrainz storage is not initialized.');
+  const settingsPath = path.join(dataDir, 'musicbrainz_settings.json');
+  const temporaryPath = `${settingsPath}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify({ throttleMs }, null, 2));
+  await fs.rename(temporaryPath, settingsPath);
+  rateLimitDelayMs = throttleMs;
+  return getMusicBrainzThrottle();
 }
 
 export function getUserAgent() {
@@ -79,24 +108,45 @@ export function makeSongKey(artist, title) {
 }
 
 // Helper: Sleep
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms, abortSignal) => new Promise((resolve, reject) => {
+  if (abortSignal?.aborted) return reject(new Error('Aborted'));
+  const timer = setTimeout(done, ms);
+  function done() {
+    abortSignal?.removeEventListener('abort', abort);
+    resolve();
+  }
+  function abort() {
+    clearTimeout(timer);
+    abortSignal?.removeEventListener('abort', abort);
+    reject(new Error('Aborted'));
+  }
+  abortSignal?.addEventListener('abort', abort, { once: true });
+});
+
+async function reserveRateLimitSlot(abortSignal) {
+  const previous = rateLimitQueue;
+  let release;
+  rateLimitQueue = new Promise((resolve) => { release = resolve; });
+  await previous;
+  try {
+    const waitTime = Math.max(0, rateLimitDelayMs - (Date.now() - lastRequestTime));
+    if (waitTime > 0) await sleep(waitTime, abortSignal);
+    if (abortSignal?.aborted) throw new Error('Aborted');
+    lastRequestTime = Date.now();
+  } finally {
+    release();
+  }
+}
 
 // Helper: Rate-limited fetch for MusicBrainz API
 async function rateLimitedFetch(url, abortSignal, attempt = 1) {
-  const now = Date.now();
-  const timeSinceLast = now - lastRequestTime;
-  if (timeSinceLast < RATE_LIMIT_DELAY_MS) {
-    const waitTime = RATE_LIMIT_DELAY_MS - timeSinceLast;
-    await sleep(waitTime);
-  }
+  await reserveRateLimitSlot(abortSignal);
 
   if (abortSignal && abortSignal.aborted) {
     throw new Error('Aborted');
   }
 
   const userAgent = getUserAgent();
-  lastRequestTime = Date.now();
-
   try {
     const res = await fetch(url, {
       signal: abortSignal,
@@ -110,7 +160,7 @@ async function rateLimitedFetch(url, abortSignal, attempt = 1) {
       if (attempt <= 3) {
         const retryAfter = parseInt(res.headers.get('retry-after') || '10', 10);
         logger.warn('MusicBrainz', `Rate limited (HTTP ${res.status}). Waiting ${retryAfter}s before retry ${attempt}...`);
-        await sleep(retryAfter * 1000);
+        await sleep(retryAfter * 1000, abortSignal);
         return rateLimitedFetch(url, abortSignal, attempt + 1);
       }
       throw new Error(`MusicBrainz rate limit exceeded (HTTP ${res.status})`);
@@ -169,7 +219,9 @@ export async function loadMbData(username) {
 export async function saveMbData(username, data) {
   const filePath = getMbFilePath(username);
   data.updatedAt = new Date().toISOString();
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+  const temporaryPath = `${filePath}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(data, null, 2));
+  await fs.rename(temporaryPath, filePath);
 }
 
 // Extract unique songs from scrobbles, recording details from the FIRST time each song was scrobbled
@@ -299,6 +351,61 @@ export function parseRecordingDetails(recording, scrobbledAlbum, scrobbledTrackT
       ? scrobbledReleaseYear - earliestYear
       : 0;
 
+  const releaseGroups = new Map();
+  const releaseDetails = releases.map((rel) => {
+    const group = rel['release-group'] || {};
+    if (group.id) {
+      releaseGroups.set(group.id, {
+        id: group.id,
+        title: group.title || null,
+        firstReleaseDate: group['first-release-date'] || null,
+        primaryType: group['primary-type'] || null,
+        secondaryTypes: Array.isArray(group['secondary-types']) ? group['secondary-types'] : [],
+        tags: Array.isArray(group.tags) ? group.tags.map((tag) => tag.name).filter(Boolean) : [],
+      });
+    }
+    return {
+      id: rel.id || null,
+      title: rel.title || null,
+      date: rel.date || null,
+      country: rel.country || null,
+      status: rel.status || null,
+      barcode: rel.barcode || null,
+      formats: (rel.media || []).map((medium) => medium.format).filter(Boolean),
+      releaseGroupId: group.id || null,
+    };
+  });
+  for (const group of recording['release-groups'] || []) {
+    if (!group.id) continue;
+    releaseGroups.set(group.id, {
+      id: group.id,
+      title: group.title || null,
+      firstReleaseDate: group['first-release-date'] || null,
+      primaryType: group['primary-type'] || null,
+      secondaryTypes: Array.isArray(group['secondary-types']) ? group['secondary-types'] : [],
+      tags: Array.isArray(group.tags) ? group.tags.map((tag) => tag.name).filter(Boolean) : [],
+    });
+  }
+  const groupList = [...releaseGroups.values()];
+  const secondaryTypes = [...new Set(groupList.flatMap((group) => group.secondaryTypes.map((type) => String(type).toLowerCase())))];
+  const primaryTypes = [...new Set(groupList.map((group) => String(group.primaryType || '').toLowerCase()).filter(Boolean))];
+  const musicPrimaryTypes = new Set(['album', 'single', 'ep']);
+  const musicSecondaryTypes = new Set(['compilation', 'dj-mix', 'live', 'mixtape/street', 'remix', 'soundtrack']);
+  const tags = (recording.tags || []).map((tag) => ({ name: tag.name, count: tag.count || 0 }));
+  const genres = (recording.genres || []).map((genre) => ({ name: genre.name, count: genre.count || 0 }));
+  const audiobookTag = [...tags.map((tag) => tag.name), ...groupList.flatMap((group) => group.tags || [])]
+    .some((tag) => ['audiobook', 'audio book', 'audiobooks'].includes(String(tag).trim().toLowerCase()));
+  const musicbrainzCategory = secondaryTypes.includes('audiobook') || audiobookTag
+    ? 'audiobook'
+    : primaryTypes.some((type) => musicPrimaryTypes.has(type)) || secondaryTypes.some((type) => musicSecondaryTypes.has(type))
+      ? 'music'
+      : 'unknown';
+  const artistCredits = (recording['artist-credit'] || []).map((credit) => ({
+    name: credit.name || credit.artist?.name || null,
+    joinPhrase: credit.joinphrase || '',
+    artistId: credit.artist?.id || null,
+    artistName: credit.artist?.name || null,
+  }));
   return {
     recordingId: recording.id,
     recordingTitle: recording.title,
@@ -312,8 +419,37 @@ export function parseRecordingDetails(recording, scrobbledAlbum, scrobbledTrackT
     hasLaterReleaseKeyword,
     yearDifference,
     totalReleasesInMB: releases.length,
+    musicbrainzCategory,
+    musicbrainzDetails: {
+      recordingId: recording.id,
+      recordingTitle: recording.title,
+      disambiguation: recording.disambiguation || null,
+      artistCredits,
+      releaseGroups: groupList,
+      releases: releaseDetails,
+      tags,
+      genres,
+    },
     musicbrainzUrl: `https://musicbrainz.org/recording/${recording.id}`,
   };
+}
+
+async function fetchRecordingDetails(recordingId, scrobbledAlbum, title, abortSignal, fallback = null) {
+  try {
+    const url = `${MUSICBRAINZ_BASE_URL}recording/${recordingId}?inc=releases+artist-credits+release-groups+tags+genres&fmt=json`;
+    const recording = await rateLimitedFetch(url, abortSignal);
+    if (recording?.id) return {
+      ...parseRecordingDetails(recording, scrobbledAlbum, title),
+      musicbrainzDetailsComplete: true,
+    };
+  } catch (err) {
+    if (abortSignal?.aborted) throw err;
+    logger.debug('MusicBrainz', `Detailed recording lookup failed for ${recordingId}: ${err.message}`);
+  }
+  return fallback ? {
+    ...parseRecordingDetails(fallback, scrobbledAlbum, title),
+    musicbrainzDetailsComplete: false,
+  } : null;
 }
 
 // Query MusicBrainz for a recording
@@ -323,10 +459,8 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   // 1. If we have a track MBID from Last.fm, we can try direct recording lookup first
   if (trackMbid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackMbid)) {
     try {
-      const url = `${MUSICBRAINZ_BASE_URL}recording/${trackMbid}?inc=releases+artist-credits+release-groups&fmt=json`;
-      const recordingData = await rateLimitedFetch(url, abortSignal);
-      if (recordingData && recordingData.id) {
-        const details = parseRecordingDetails(recordingData, firstScrobbledAlbum, title);
+      const details = await fetchRecordingDetails(trackMbid, firstScrobbledAlbum, title, abortSignal);
+      if (details) {
         return {
           status: 'found',
           source: 'mbid',
@@ -382,7 +516,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   if (result && result.recordings && result.recordings.length > 0) {
     // Pick the best match (recordings are sorted by Lucene relevance score descending)
     const bestMatch = result.recordings[0];
-    const details = parseRecordingDetails(bestMatch, firstScrobbledAlbum, title);
+    const details = await fetchRecordingDetails(bestMatch.id, firstScrobbledAlbum, title, abortSignal, bestMatch);
     return {
       status: 'found',
       source: 'search',
@@ -393,6 +527,8 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   // If not found in MusicBrainz
   return {
     status: 'not_found',
+    musicbrainzCategory: 'unknown',
+    musicbrainzDetails: null,
     earliestDate: null,
     earliestYear: null,
     earliestReleaseTitle: null,
@@ -483,6 +619,7 @@ export async function startMusicBrainzJob(username, options = {}) {
   const pendingSongs = uniqueSongs.filter((s) => {
     const existing = mbData.songs[s.songKey];
     if (!existing) return true;
+    if (existing.musicbrainzSchemaVersion !== 2) return true;
     if (existing.mbStatus === 'error') return true;
     return false;
   });
@@ -492,6 +629,8 @@ export async function startMusicBrainzJob(username, options = {}) {
     abortController,
     aborted: false,
     progress: mbData.progress,
+    totalToLookup: pendingSongs.length,
+    completion: null,
   };
   activeJobs.set(key, jobState);
 
@@ -501,19 +640,37 @@ export async function startMusicBrainzJob(username, options = {}) {
   );
 
   // Run in background asynchronously
-  (async () => {
+  jobState.completion = (async () => {
     let processedThisRun = 0;
     const totalSongs = uniqueSongs.length;
     let alreadyDoneCount = totalSongs - pendingSongs.length;
 
     try {
       mbData.status = 'running';
+      mbData.progress = {
+        totalUniqueSongs: totalSongs,
+        totalToLookup: pendingSongs.length,
+        processedCount: alreadyDoneCount,
+        remainingCount: pendingSongs.length,
+        percent: totalSongs ? Math.round((alreadyDoneCount / totalSongs) * 100) : 100,
+        message: `${pendingSongs.length} songs queued for MusicBrainz lookup.`,
+      };
+      jobState.progress = mbData.progress;
+      await saveMbData(key, mbData);
+      broadcastMbEvent(key, 'mb-progress', mbData.progress);
 
       for (let i = 0; i < pendingSongs.length; i++) {
         if (jobState.aborted) {
           logger.info('MusicBrainzJob', `[${key}] Enrichment paused by user request`);
           mbData.status = 'paused';
-          mbData.progress.message = `Enrichment paused. (${alreadyDoneCount + processedThisRun} / ${totalSongs} songs processed)`;
+          mbData.progress = {
+            ...mbData.progress,
+            currentSong: null,
+            processedCount: alreadyDoneCount + processedThisRun,
+            remainingCount: pendingSongs.length - processedThisRun,
+            message: `Enrichment stopped and saved. ${pendingSongs.length - processedThisRun} songs remain.`,
+          };
+          jobState.progress = mbData.progress;
           await saveMbData(key, mbData);
           broadcastMbEvent(key, 'mb-paused', mbData.progress);
           activeJobs.delete(key);
@@ -526,7 +683,9 @@ export async function startMusicBrainzJob(username, options = {}) {
 
         const progressUpdate = {
           totalUniqueSongs: totalSongs,
+          totalToLookup: pendingSongs.length,
           processedCount: currentNum,
+          remainingCount: pendingSongs.length - processedThisRun,
           percent,
           currentSong: {
             artist: song.artist,
@@ -537,6 +696,7 @@ export async function startMusicBrainzJob(username, options = {}) {
         };
 
         mbData.progress = progressUpdate;
+        jobState.progress = progressUpdate;
         broadcastMbEvent(key, 'mb-progress', progressUpdate);
 
         let mbResult;
@@ -545,6 +705,14 @@ export async function startMusicBrainzJob(username, options = {}) {
         } catch (err) {
           if (jobState.aborted) {
             mbData.status = 'paused';
+            mbData.progress = {
+              ...mbData.progress,
+              currentSong: null,
+              processedCount: alreadyDoneCount + processedThisRun,
+              remainingCount: pendingSongs.length - processedThisRun,
+              message: `Enrichment stopped and saved. ${pendingSongs.length - processedThisRun} songs remain.`,
+            };
+            jobState.progress = mbData.progress;
             await saveMbData(key, mbData);
             broadcastMbEvent(key, 'mb-paused', mbData.progress);
             activeJobs.delete(key);
@@ -554,6 +722,8 @@ export async function startMusicBrainzJob(username, options = {}) {
           mbResult = {
             status: 'error',
             error: err.message,
+            musicbrainzCategory: 'unknown',
+            musicbrainzDetails: null,
             earliestDate: null,
             earliestYear: null,
             scrobbledReleaseYear: parseYear(song.firstScrobbledAlbum),
@@ -570,6 +740,14 @@ export async function startMusicBrainzJob(username, options = {}) {
           firstScrobbledAlbum: song.firstScrobbledAlbum,
           scrobbleCount: song.scrobbleCount,
           mbStatus: mbResult.status,
+          musicbrainzSchemaVersion: mbResult.status === 'not_found' || mbResult.musicbrainzDetailsComplete ? 2 : 1,
+          musicbrainzDetailsComplete: Boolean(mbResult.musicbrainzDetailsComplete),
+          musicbrainzCategory: mbResult.musicbrainzCategory || 'unknown',
+          musicbrainzTypes: mbResult.musicbrainzDetails ? {
+            primary: [...new Set(mbResult.musicbrainzDetails.releaseGroups.map((group) => group.primaryType).filter(Boolean))],
+            secondary: [...new Set(mbResult.musicbrainzDetails.releaseGroups.flatMap((group) => group.secondaryTypes || []))],
+          } : { primary: [], secondary: [] },
+          musicbrainzDetails: mbResult.musicbrainzDetails || null,
           mbid: mbResult.recordingId || null,
           mbTitle: mbResult.recordingTitle || null,
           earliestReleaseYear: mbResult.earliestYear || null,
@@ -587,24 +765,33 @@ export async function startMusicBrainzJob(username, options = {}) {
 
         mbData.songs[song.songKey] = storedSong;
         processedThisRun++;
+        mbData.progress = {
+          ...progressUpdate,
+          currentSong: null,
+          processedCount: alreadyDoneCount + processedThisRun,
+          remainingCount: pendingSongs.length - processedThisRun,
+          percent: Math.min(100, Math.round(((alreadyDoneCount + processedThisRun) / totalSongs) * 100)),
+          message: `${pendingSongs.length - processedThisRun} songs remain in this lookup queue.`,
+        };
+        jobState.progress = mbData.progress;
+        await saveMbData(key, mbData);
 
         // Broadcast enriched track event
         broadcastMbEvent(key, 'mb-track', storedSong);
-
-        // Periodically save to disk every 5 tracks to ensure progress is preserved
-        if (processedThisRun % 5 === 0) {
-          await saveMbData(key, mbData);
-        }
+        broadcastMbEvent(key, 'mb-progress', mbData.progress);
       }
 
       // Complete!
       mbData.status = 'completed';
       mbData.progress = {
         totalUniqueSongs: totalSongs,
+        totalToLookup: pendingSongs.length,
         processedCount: totalSongs,
+        remainingCount: 0,
         percent: 100,
         message: `MusicBrainz enrichment complete! All ${totalSongs} songs processed.`,
       };
+      jobState.progress = mbData.progress;
       await saveMbData(key, mbData);
       broadcastMbEvent(key, 'mb-complete', mbData.progress);
       activeJobs.delete(key);
@@ -627,13 +814,22 @@ export function pauseMusicBrainzJob(username) {
   const key = username.toLowerCase().trim();
   const jobState = activeJobs.get(key);
   if (!jobState) {
-    return { paused: false, message: 'No active job running' };
+    return { paused: false, message: 'No active lookup. Saved progress is ready to resume.' };
   }
 
   jobState.aborted = true;
   jobState.abortController.abort();
   logger.info('MusicBrainzJob', `[${key}] Requested job pause`);
-  return { paused: true, message: 'Pause requested' };
+  return { paused: true, message: 'Stop requested. The active lookup will be saved and remaining items can be resumed.' };
+}
+
+export async function pauseAllMusicBrainzJobs() {
+  const jobs = [...activeJobs.values()];
+  for (const job of jobs) {
+    job.aborted = true;
+    job.abortController.abort();
+  }
+  await Promise.allSettled(jobs.map((job) => job.completion).filter(Boolean));
 }
 
 // Get user's MusicBrainz summary and status
@@ -645,9 +841,13 @@ export async function getMusicBrainzStatus(username) {
   const uniqueSongs = extractUniqueSongsFromScrobbles(scrobbles);
 
   const songsArray = Object.values(mbData.songs || {});
-  const foundCount = songsArray.filter((s) => s.mbStatus === 'found').length;
-  const notFoundCount = songsArray.filter((s) => s.mbStatus === 'not_found').length;
-  const laterReleaseCount = songsArray.filter((s) => s.isLaterRelease).length;
+  const currentSongs = uniqueSongs.map((song) => mbData.songs?.[song.songKey]).filter(Boolean);
+  const foundCount = currentSongs.filter((s) => s.musicbrainzSchemaVersion === 2 && s.mbStatus === 'found').length;
+  const notFoundCount = currentSongs.filter((s) => s.musicbrainzSchemaVersion === 2 && s.mbStatus === 'not_found').length;
+  const laterReleaseCount = currentSongs.filter((s) => s.isLaterRelease).length;
+  const audiobookCount = uniqueSongs.filter((s) => mbData.songs?.[s.songKey]?.musicbrainzCategory === 'audiobook').length;
+  const musicCount = uniqueSongs.filter((s) => mbData.songs?.[s.songKey]?.musicbrainzCategory === 'music').length;
+  const unknownClassificationCount = Math.max(0, uniqueSongs.length - audiobookCount - musicCount);
 
   // Find oldest release year discovered
   const years = songsArray
@@ -656,13 +856,13 @@ export async function getMusicBrainzStatus(username) {
   const oldestYear = years.length > 0 ? Math.min(...years) : null;
 
   const totalUnique = uniqueSongs.length;
-  const processed = songsArray.length;
+  const processed = uniqueSongs.filter((song) => mbData.songs?.[song.songKey]?.musicbrainzSchemaVersion === 2).length;
   const pending = Math.max(0, totalUnique - processed);
 
   return {
     username: key,
     isRunning: Boolean(activeJob),
-    status: activeJob ? 'running' : mbData.status || 'idle',
+    status: activeJob ? 'running' : mbData.status === 'running' ? 'paused' : mbData.status || 'idle',
     progress: activeJob?.progress || mbData.progress || { percent: 0 },
     stats: {
       totalUniqueSongs: totalUnique,
@@ -671,10 +871,24 @@ export async function getMusicBrainzStatus(username) {
       foundCount,
       notFoundCount,
       laterReleaseCount,
+      audiobookCount,
+      musicCount,
+      unknownClassificationCount,
       oldestReleaseYear: oldestYear,
       percentComplete: totalUnique > 0 ? Math.min(100, Math.round((processed / totalUnique) * 100)) : 0,
     },
   };
+}
+
+// Return cached MusicBrainz classifications for local scrobbles; this never makes network requests.
+export async function getMusicBrainzClassifications(username) {
+  const key = username.toLowerCase().trim();
+  const [mbData, scrobbles] = await Promise.all([loadMbData(key), loadUserScrobbles(key)]);
+  const songs = extractUniqueSongsFromScrobbles(scrobbles);
+  return Object.fromEntries(songs.flatMap((song) => {
+    const classification = mbData.songs?.[song.songKey]?.musicbrainzCategory;
+    return ['music', 'audiobook'].includes(classification) ? [[song.songKey, classification]] : [];
+  }));
 }
 
 // Get paginated / filtered MusicBrainz songs data
@@ -685,7 +899,7 @@ export async function getMusicBrainzData(username, params = {}) {
   const uniqueSongs = extractUniqueSongsFromScrobbles(scrobbles);
 
   const search = (params.search || '').toLowerCase().trim();
-  const filter = params.filter || 'all'; // all, later_releases, found, not_found, pending
+  const filter = params.filter || 'all'; // all, later_releases, found, not_found, pending, music, audiobook, classification_unknown
   const sortBy = params.sortBy || 'firstScrobbledAsc'; // firstScrobbledAsc, firstScrobbledDesc, earliestYearAsc, earliestYearDesc, yearDiffDesc, playCountDesc, artistAsc, titleAsc
   const page = Math.max(1, parseInt(params.page || '1', 10));
   const limit = Math.min(200, Math.max(1, parseInt(params.limit || '50', 10)));
@@ -697,11 +911,13 @@ export async function getMusicBrainzData(username, params = {}) {
       return {
         ...us,
         ...enriched,
+        musicbrainzCategory: enriched.musicbrainzCategory || 'unknown',
       };
     }
     return {
       ...us,
       mbStatus: 'pending',
+      musicbrainzCategory: 'unknown',
       earliestReleaseYear: null,
       earliestReleaseDate: null,
       earliestReleaseTitle: null,
@@ -733,6 +949,12 @@ export async function getMusicBrainzData(username, params = {}) {
     combined = combined.filter((s) => s.mbStatus === 'not_found');
   } else if (filter === 'pending') {
     combined = combined.filter((s) => s.mbStatus === 'pending');
+  } else if (filter === 'music') {
+    combined = combined.filter((s) => s.musicbrainzCategory === 'music');
+  } else if (filter === 'audiobook') {
+    combined = combined.filter((s) => s.musicbrainzCategory === 'audiobook');
+  } else if (filter === 'classification_unknown') {
+    combined = combined.filter((s) => !['music', 'audiobook'].includes(s.musicbrainzCategory));
   }
 
   // Apply sorting
