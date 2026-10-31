@@ -16,14 +16,15 @@
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
     .stat { background: #29292e; padding: 14px; border-radius: 6px; color: #a8a8b3; }
     .stat strong { display: block; color: #fff; font-size: 18px; margin-top: 5px; }
-    .related-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-    .related { min-width: 0; }
+    .related-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .related { min-width: 0; width: 100%; box-sizing: border-box; }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #323238; vertical-align: top; }
     th { color: #a8a8b3; font-size: 12px; }
     .sort-button { appearance: none; background: none; border: 0; color: inherit; font: inherit; font-weight: 600; padding: 0; cursor: pointer; text-align: left; }
     .sort-button:hover { color: #ff6870; }
     td:first-child { overflow-wrap: anywhere; }
+    .related-items a { display: block; padding: 2px 0; }
     .count { white-space: nowrap; color: #a8a8b3; }
     .loading { margin: 15px 0; padding: 14px; background: #202024; border-radius: 8px; }
     .empty { color: #a8a8b3; padding: 12px 0; }

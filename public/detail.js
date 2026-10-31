@@ -118,8 +118,8 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
       } else itemCell.textContent = record.label;
       const relatedCell = document.createElement('td');
       if (record.related?.length) {
-        record.related.forEach((entity, index) => {
-          if (index) relatedCell.append(document.createTextNode(', '));
+        relatedCell.className = 'related-items';
+        record.related.forEach(entity => {
           const link = document.createElement('a'); link.href = detailUrl(entity.kind, entity.name, entity.artist); link.textContent = entity.label;
           relatedCell.append(link);
         });
