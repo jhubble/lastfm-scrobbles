@@ -2,11 +2,19 @@ let currentEventSource = null;
 let statusCheckTimeout = null;
 let selectedThrottleMs = 1000;
 let activityLogCount = 0;
+let loadedScrobbles = [];
 
 const setStatus = (msg) => {
   const el = document.getElementById('status');
   if (el) el.innerText = msg;
 };
+
+function openAnalysis() {
+  const username = document.getElementById('username')?.value.trim();
+  if (!username) return alert('Please enter a Last.fm username and load scrobbles first.');
+  if (!window.loadedScrobbles?.length) return alert('Load this user’s scrobbles before opening analysis.');
+  window.location.href = `analysis.html?username=${encodeURIComponent(username)}`;
+}
 
 // Activity Log Helper
 function addActivityLog(message, type = 'info') {
@@ -390,6 +398,14 @@ async function fetchLocalData(silent = false) {
       if (!silent) setStatus('No local data found for this user. Click "Download All" to fetch.');
       checkUserStatus(username, true);
       return;
+    }
+
+    loadedScrobbles = Array.isArray(data.scrobbles) ? data.scrobbles : [];
+    window.loadedScrobbles = loadedScrobbles;
+    try {
+      sessionStorage.setItem(`lastfm_scrobbles_${username.toLowerCase()}`, JSON.stringify(loadedScrobbles));
+    } catch (err) {
+      console.warn('Could not cache scrobbles for analysis:', err.message);
     }
 
     document.getElementById('stTotal').innerText = data.stats.totalScrobbles.toLocaleString();
