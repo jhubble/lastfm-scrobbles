@@ -3,6 +3,7 @@ const username = query.get('username') || '';
 const type = query.get('type') || '';
 const name = query.get('name') || '';
 const artist = query.get('artist') || '';
+const categoryFilter = query.get('category') || 'all';
 const norm = value => String(value || '').trim().toLocaleLowerCase();
 const textOf = (value, fallback = '') => {
   if (typeof value === 'string') return value.trim() || fallback;
@@ -18,6 +19,7 @@ const dateOf = track => {
 const formatDate = date => date ? date.toLocaleDateString() : '—';
 
 function matches(track) {
+  if (categoryFilter !== 'all' && ScrobbleCategories.category(username, track) !== categoryFilter) return false;
   if (type === 'artist') return norm(artistOf(track)) === norm(name);
   if (type === 'album') return norm(albumOf(track)) === norm(name) && norm(artistOf(track)) === norm(artist);
   return norm(titleOf(track)) === norm(name) && norm(artistOf(track)) === norm(artist);
@@ -51,7 +53,7 @@ function entityEntries(tracks, entityType) {
 }
 
 function detailUrl(kind, label, entityArtist = '') {
-  const params = new URLSearchParams({ username, type: kind, name: label, artist: entityArtist });
+  const params = new URLSearchParams({ username, type: kind, name: label, artist: entityArtist, category: categoryFilter });
   return `detail.html?${params.toString()}`;
 }
 
@@ -165,11 +167,12 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
 }
 
 function render(scrobbles) {
-  const selected = scrobbles.filter(matches);
+  const scoped = scrobbles.filter(track => categoryFilter === 'all' || ScrobbleCategories.category(username, track) === categoryFilter);
+  const selected = scoped.filter(matches);
   if (!selected.length) throw new Error('No listening history was found for this item.');
-  const allEntries = entityEntries(scrobbles, type);
+  const allEntries = entityEntries(scoped, type);
   const currentYear = new Date().getFullYear();
-  const yearTracks = scrobbles.filter(track => dateOf(track)?.getFullYear() === currentYear);
+  const yearTracks = scoped.filter(track => dateOf(track)?.getFullYear() === currentYear);
   const currentYearEntries = entityEntries(yearTracks, type);
   const targetKey = type === 'artist' ? norm(name) : `${norm(artist)}\u0000${norm(name)}`;
   const selectedDates = selected.map(dateOf).filter(Boolean);
@@ -212,7 +215,7 @@ function render(scrobbles) {
       buildRelatedTable('Tracks by this artist', tracks, 'track', 'No tracks found.', 'Track', 'Album'),
     );
   } else if (type === 'album') {
-    const albumScrobbles = scrobbles.filter(track => norm(albumOf(track)) === norm(name));
+    const albumScrobbles = scoped.filter(track => norm(albumOf(track)) === norm(name));
     const artists = attachRelated(aggregate(albumScrobbles, track => norm(artistOf(track)), artistOf), albumScrobbles, track => norm(artistOf(track)), 'track')
       .map(record => ({ ...record, linkName: record.label }));
     const trackKey = track => `${norm(artistOf(track))}\u0000${norm(titleOf(track))}`;
@@ -225,7 +228,7 @@ function render(scrobbles) {
       buildRelatedTable('Tracks on this album', tracks, 'track', 'No tracks found.', 'Track', 'Artist'),
     );
   } else {
-    const sameTitle = scrobbles.filter(track => norm(titleOf(track)) === norm(name));
+    const sameTitle = scoped.filter(track => norm(titleOf(track)) === norm(name));
     const albumKey = track => `${norm(artistOf(track))}\u0000${norm(albumOf(track))}`;
     const albumTracks = sameTitle.filter(track => albumOf(track));
     const albums = attachRelated(aggregate(albumTracks, albumKey, track => albumOf(track)), albumTracks, albumKey, 'artist').map(record => {
@@ -256,6 +259,9 @@ async function load() {
     if (!Array.isArray(data.scrobbles)) throw new Error('No local scrobble data found for this user.');
     scrobbles = data.scrobbles;
   }
+  try { await ScrobbleCategories.load(username); }
+  catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
+  ScrobbleCategories.prepare(scrobbles);
   render(scrobbles);
 }
 

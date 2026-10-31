@@ -189,6 +189,35 @@ try {
 
 const getDataFilePath = (username) => path.join(DATA_DIR, `${username.toLowerCase().trim()}_scrobbles.json`);
 const getProgressFilePath = (username) => path.join(DATA_DIR, `${username.toLowerCase().trim()}_download_progress.json`);
+const accountIdCache = new Map();
+
+async function getLastFmAccountId(username) {
+  const cacheKey = username.toLowerCase().trim();
+  if (accountIdCache.has(cacheKey)) return accountIdCache.get(cacheKey);
+  const url = `${BASE_URL}?method=user.getInfo&user=${encodeURIComponent(username)}&api_key=${API_KEY}&format=json`;
+  const response = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined });
+  if (!response.ok) throw new Error(`Last.fm user lookup failed (HTTP ${response.status}).`);
+  const data = await response.json();
+  const accountId = String(data?.user?.id || '');
+  if (!/^\d+$/.test(accountId)) throw new Error(data?.message || 'Last.fm did not return a valid account ID.');
+  accountIdCache.set(cacheKey, accountId);
+  return accountId;
+}
+
+function getCategoryFilePath(accountId) {
+  if (!/^\d+$/.test(String(accountId))) throw new Error('Invalid Last.fm account ID.');
+  return path.join(DATA_DIR, `audiobook_categories_${accountId}.json`);
+}
+
+async function loadCategories(accountId) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getCategoryFilePath(accountId), 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (err) {
+    if (err.code === 'ENOENT') return {};
+    throw err;
+  }
+}
 
 // Read scrobbles from file
 async function loadScrobbles(username) {
@@ -832,6 +861,35 @@ app.get('/api/scrobbles/throttle', (req, res) => {
 
 // Keep this parameterized route after specific one-segment routes such as
 // /download-stream and /throttle so it cannot intercept them.
+app.get('/api/scrobbles/:username/categories', async (req, res) => {
+  try {
+    const accountId = await getLastFmAccountId(req.params.username.trim());
+    return res.json({ accountId, categories: await loadCategories(accountId) });
+  } catch (err) {
+    logger.warn('Categories', `Could not load categories for ${req.params.username}: ${err.message}`);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
+app.put('/api/scrobbles/:username/categories', async (req, res) => {
+  const { artist, title, category } = req.body || {};
+  if (typeof artist !== 'string' || !artist.trim() || typeof title !== 'string' || !title.trim() || !['music', 'audiobook', 'auto'].includes(category)) {
+    return res.status(400).json({ error: 'artist, title, and a valid category are required.' });
+  }
+  try {
+    const accountId = await getLastFmAccountId(req.params.username.trim());
+    const categories = await loadCategories(accountId);
+    const itemKey = `${artist.trim().toLocaleLowerCase()}\u0000${title.trim().toLocaleLowerCase()}`;
+    if (category === 'auto') delete categories[itemKey];
+    else categories[itemKey] = category;
+    await fs.writeFile(getCategoryFilePath(accountId), JSON.stringify(categories, null, 2));
+    return res.json({ accountId, categories });
+  } catch (err) {
+    logger.error('Categories', `Could not save category for ${req.params.username}: ${err.message}`, err);
+    return res.status(502).json({ error: err.message });
+  }
+});
+
 app.get('/api/scrobbles/:username', async (req, res) => {
   const username = req.params.username.trim();
   const scrobbles = await loadScrobbles(username);

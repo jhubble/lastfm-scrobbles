@@ -2,6 +2,7 @@ const params = new URLSearchParams(location.search);
 const username = params.get('username') || '';
 let scrobbles = [];
 let itemLimit = 25;
+let categoryFilter = 'all';
 let activeRange = { start: new Date(Date.now() - 30 * 86400000), end: new Date(), label: 'Last 30 days' };
 
 function textOf(value, fallback = '') {
@@ -60,7 +61,7 @@ function itemCounts(tracks, type) {
 }
 
 function detailHref(type, name, artist = '') {
-  const query = new URLSearchParams({ username, type, name, artist });
+  const query = new URLSearchParams({ username, type, name, artist, category: categoryFilter });
   return `detail.html?${query.toString()}`;
 }
 
@@ -142,13 +143,34 @@ function renderList(id, entries) {
     const plays = document.createElement('span'); plays.className = 'plays';
     plays.textContent = `${item.count} ${item.count === 1 ? 'play' : 'plays'}`;
     row.append(name, plays); list.append(row);
+    if (id === 'tracks') {
+      const sample = scrobbles.find(track => textOf(track.artist, 'Unknown artist') === (item.secondary || '') && textOf(track.name, 'Unknown track') === item.primary);
+      if (sample) {
+        const control = document.createElement('select'); control.setAttribute('aria-label', `Category for ${item.primary}`);
+        for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook']]) {
+          const option = document.createElement('option'); option.value = value; option.textContent = label;
+          option.selected = ScrobbleCategories.category(username, sample) === value; control.append(option);
+        }
+        control.addEventListener('change', async () => {
+          control.disabled = true;
+          try {
+            await ScrobbleCategories.setCategory(username, sample, control.value);
+            updateAnalysis();
+          } catch (error) {
+            alert(error.message);
+            updateAnalysis();
+          }
+        });
+        row.append(control);
+      }
+    }
   }
 }
 
 function updateAnalysis() {
   const filtered = scrobbles.filter(track => {
     const date = scrobbleDate(track);
-    return date && date >= activeRange.start && date <= activeRange.end;
+    return date && date >= activeRange.start && date <= activeRange.end && (categoryFilter === 'all' || ScrobbleCategories.category(username, track) === categoryFilter);
   });
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
   renderList('tracks', countItems(filtered, 'tracks'));
@@ -157,6 +179,8 @@ function updateAnalysis() {
   updateInsights(filtered);
   document.querySelectorAll('[data-range]').forEach(button => button.classList.toggle('active', button.dataset.range === activeRange.label));
 }
+
+document.getElementById('categoryFilter').addEventListener('change', event => { categoryFilter = event.target.value; updateAnalysis(); });
 
 function setRollingRange(days, label) {
   const end = new Date();
@@ -239,6 +263,9 @@ async function loadScrobbles() {
     try { sessionStorage.setItem(`lastfm_scrobbles_${username.toLowerCase()}`, JSON.stringify(scrobbles)); } catch {}
   }
   if (loadingMessage) loadingMessage.textContent = 'Preparing rankings and time period shortcuts…';
+  try { await ScrobbleCategories.load(username); }
+  catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
+  ScrobbleCategories.prepare(scrobbles);
   await new Promise(resolve => requestAnimationFrame(resolve));
   buildShortcuts(); updateAnalysis();
   if (loading) loading.style.display = 'none';

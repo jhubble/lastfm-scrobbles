@@ -62,6 +62,8 @@
       <div class="period-links" id="monthLinks"></div>
       <div class="period-links" id="yearLinks"></div>
       <div class="toolbar">
+        <label for="categoryFilter">Show</label>
+        <select id="categoryFilter" aria-label="Report category"><option value="all">Everything</option><option value="music">Music</option><option value="audiobook">Audiobooks</option></select>
         <label for="startDate">Custom range</label>
         <input type="date" id="startDate" aria-label="Start date">
         <span>to</span>
@@ -93,6 +95,7 @@
       <div class="insight-groups" id="justNowLists"></div>
     </section>
   </main>
+  <script src="audiobooks.js"></script>
   <script src="analysis.js"></script>
 </body>
 </html>
