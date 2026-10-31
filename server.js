@@ -698,7 +698,10 @@ app.post('/api/scrobbles/sync', async (req, res) => {
   }
 
   try {
-    const latestStoredUts = Math.max(...localScrobbles.map((track) => Number(track.date?.uts || 0)));
+    const latestStoredUts = localScrobbles.reduce(
+      (latest, track) => Math.max(latest, Number(track.date?.uts || 0)),
+      0,
+    );
     const newTracks = [];
     const effectiveThrottle = typeof throttleMs === 'number' && throttleMs >= 100
       ? throttleMs
@@ -725,7 +728,7 @@ app.post('/api/scrobbles/sync', async (req, res) => {
     } while (page <= totalPages && !reachedExistingTrack);
 
     const combined = newTracks.length > 0
-      ? await saveScrobbles(key, [...localScrobbles, ...newTracks])
+      ? await saveScrobbles(key, localScrobbles.concat(newTracks))
       : localScrobbles;
     logger.info('ScrobbleSync', `[${key}] Sync finished`, {
       added: newTracks.length,
