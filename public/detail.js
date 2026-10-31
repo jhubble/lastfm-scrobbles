@@ -62,7 +62,34 @@ function appendStat(label, value) {
   box.append(title, val); document.getElementById('stats').append(box);
 }
 
-function buildRelatedTable(title, records, kind, emptyText) {
+function relatedEntities(tracks, kind) {
+  const found = new Map();
+  for (const track of tracks) {
+    const relatedName = kind === 'artist' ? artistOf(track) : kind === 'album' ? albumOf(track) : titleOf(track);
+    if (!relatedName) continue;
+    const relatedArtist = kind === 'artist' ? '' : artistOf(track);
+    const key = kind === 'artist' ? norm(relatedName) : `${norm(relatedArtist)}\u0000${norm(relatedName)}`;
+    if (!found.has(key)) found.set(key, {
+      label: relatedName,
+      kind,
+      name: relatedName,
+      artist: relatedArtist,
+    });
+  }
+  return [...found.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function attachRelated(records, sourceTracks, groupingKey, relatedKind) {
+  const grouped = new Map();
+  for (const track of sourceTracks) {
+    const key = groupingKey(track);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(track);
+  }
+  return records.map(record => ({ ...record, related: relatedEntities(grouped.get(record.key) || [], relatedKind) }));
+}
+
+function buildRelatedTable(title, records, kind, emptyText, itemHeading, relatedHeading) {
   const section = document.createElement('section'); section.className = 'card related';
   const heading = document.createElement('h2'); heading.textContent = title; section.append(heading);
   if (!records.length) {
@@ -73,7 +100,8 @@ function buildRelatedTable(title, records, kind, emptyText) {
   const thead = document.createElement('thead');
   const header = document.createElement('tr');
   const columns = [
-    { key: 'label', label: 'Item' },
+    { key: 'label', label: itemHeading },
+    { key: 'related', label: relatedHeading },
     { key: 'count', label: 'Listens' },
     { key: 'first', label: 'First listened' },
     { key: 'last', label: 'Last listened' },
@@ -88,10 +116,18 @@ function buildRelatedTable(title, records, kind, emptyText) {
       if (kind) {
         const link = document.createElement('a'); link.href = detailUrl(kind, record.linkName || record.label, record.artist || ''); link.textContent = record.label; itemCell.append(link);
       } else itemCell.textContent = record.label;
+      const relatedCell = document.createElement('td');
+      if (record.related?.length) {
+        record.related.forEach((entity, index) => {
+          if (index) relatedCell.append(document.createTextNode(', '));
+          const link = document.createElement('a'); link.href = detailUrl(entity.kind, entity.name, entity.artist); link.textContent = entity.label;
+          relatedCell.append(link);
+        });
+      } else relatedCell.textContent = '—';
       const countCell = document.createElement('td'); countCell.className = 'count'; countCell.textContent = record.count.toLocaleString();
       const firstCell = document.createElement('td'); firstCell.textContent = formatDate(record.first);
       const lastCell = document.createElement('td'); lastCell.textContent = formatDate(record.last);
-      row.append(itemCell, countCell, firstCell, lastCell); body.append(row);
+      row.append(itemCell, relatedCell, countCell, firstCell, lastCell); body.append(row);
     });
   };
   columns.forEach(column => {
@@ -112,6 +148,10 @@ function buildRelatedTable(title, records, kind, emptyText) {
           const aTime = a[column.key]?.getTime() ?? (direction === 'asc' ? Infinity : -Infinity);
           const bTime = b[column.key]?.getTime() ?? (direction === 'asc' ? Infinity : -Infinity);
           comparison = aTime - bTime;
+        } else if (column.key === 'related') {
+          const aRelated = (a.related || []).map(entity => entity.label).join(', ');
+          const bRelated = (b.related || []).map(entity => entity.label).join(', ');
+          comparison = aRelated.localeCompare(bRelated, undefined, { sensitivity: 'base' });
         } else comparison = a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
         return direction === 'asc' ? comparison : -comparison;
       });
@@ -120,7 +160,7 @@ function buildRelatedTable(title, records, kind, emptyText) {
     th.append(button); th.setAttribute('aria-sort', 'none'); header.append(th);
   });
   thead.append(header); table.append(thead);
-  renderRows([...records].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)));
+  renderRows([...records].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })));
   table.append(body); section.append(table); return section;
 }
 
@@ -162,25 +202,42 @@ function render(scrobbles) {
 
   const related = document.getElementById('related'); related.replaceChildren();
   if (type === 'artist') {
-    const albums = aggregate(selected.filter(track => albumOf(track)), track => norm(albumOf(track)), track => albumOf(track)).map(record => ({ ...record, linkName: record.label, artist: name }));
-    const tracks = aggregate(selected, track => norm(titleOf(track)), titleOf).map(record => ({ ...record, linkName: record.label, artist: name }));
-    related.append(buildRelatedTable('Albums by this artist', albums, 'album', 'No album tags found.'), buildRelatedTable('Tracks by this artist', tracks, 'track', 'No tracks found.'));
+    const albumTracks = selected.filter(track => albumOf(track));
+    const albums = attachRelated(aggregate(albumTracks, track => norm(albumOf(track)), track => albumOf(track)), albumTracks, track => norm(albumOf(track)), 'artist')
+      .map(record => ({ ...record, linkName: record.label, artist: name }));
+    const tracks = attachRelated(aggregate(selected, track => norm(titleOf(track)), titleOf), selected, track => norm(titleOf(track)), 'album')
+      .map(record => ({ ...record, linkName: record.label, artist: name }));
+    related.append(
+      buildRelatedTable('Albums by this artist', albums, 'album', 'No album tags found.', 'Album', 'Artist'),
+      buildRelatedTable('Tracks by this artist', tracks, 'track', 'No tracks found.', 'Track', 'Album'),
+    );
   } else if (type === 'album') {
     const albumScrobbles = scrobbles.filter(track => norm(albumOf(track)) === norm(name));
-    const artists = aggregate(albumScrobbles, track => norm(artistOf(track)), artistOf).map(record => ({ ...record, linkName: record.label }));
-    const tracks = aggregate(albumScrobbles, track => `${norm(artistOf(track))}\u0000${norm(titleOf(track))}`, track => titleOf(track)).map(record => {
+    const artists = attachRelated(aggregate(albumScrobbles, track => norm(artistOf(track)), artistOf), albumScrobbles, track => norm(artistOf(track)), 'track')
+      .map(record => ({ ...record, linkName: record.label }));
+    const trackKey = track => `${norm(artistOf(track))}\u0000${norm(titleOf(track))}`;
+    const tracks = attachRelated(aggregate(albumScrobbles, trackKey, titleOf), albumScrobbles, trackKey, 'artist').map(record => {
       const sample = albumScrobbles.find(track => norm(titleOf(track)) === record.key.split('\u0000')[1] && norm(artistOf(track)) === record.key.split('\u0000')[0]);
       return { ...record, linkName: record.label, artist: sample ? artistOf(sample) : '' };
     });
-    related.append(buildRelatedTable('Artists on this album', artists, 'artist', 'No artists found.'), buildRelatedTable('Tracks on this album', tracks, 'track', 'No tracks found.'));
+    related.append(
+      buildRelatedTable('Artists on this album', artists, 'artist', 'No artists found.', 'Artist', 'Track'),
+      buildRelatedTable('Tracks on this album', tracks, 'track', 'No tracks found.', 'Track', 'Artist'),
+    );
   } else {
     const sameTitle = scrobbles.filter(track => norm(titleOf(track)) === norm(name));
-    const albums = aggregate(sameTitle.filter(track => albumOf(track)), track => `${norm(artistOf(track))}\u0000${norm(albumOf(track))}`, track => albumOf(track)).map(record => {
+    const albumKey = track => `${norm(artistOf(track))}\u0000${norm(albumOf(track))}`;
+    const albumTracks = sameTitle.filter(track => albumOf(track));
+    const albums = attachRelated(aggregate(albumTracks, albumKey, track => albumOf(track)), albumTracks, albumKey, 'artist').map(record => {
       const sample = sameTitle.find(track => norm(albumOf(track)) === record.key.split('\u0000')[1] && norm(artistOf(track)) === record.key.split('\u0000')[0]);
       return { ...record, linkName: record.label, artist: sample ? artistOf(sample) : '' };
     });
-    const artists = aggregate(sameTitle, track => norm(artistOf(track)), artistOf).map(record => ({ ...record, linkName: record.label }));
-    related.append(buildRelatedTable('Albums containing this track', albums, 'album', 'No album tags found.'), buildRelatedTable('Artists for this track', artists, 'artist', 'No artists found.'));
+    const artists = attachRelated(aggregate(sameTitle, track => norm(artistOf(track)), artistOf), sameTitle, track => norm(artistOf(track)), 'album')
+      .map(record => ({ ...record, linkName: record.label }));
+    related.append(
+      buildRelatedTable('Albums containing this track', albums, 'album', 'No album tags found.', 'Album', 'Artist'),
+      buildRelatedTable('Artists for this track', artists, 'artist', 'No artists found.', 'Artist', 'Album'),
+    );
   }
   document.getElementById('content').hidden = false;
   document.getElementById('loading').hidden = true;
