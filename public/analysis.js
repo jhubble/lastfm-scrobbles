@@ -59,6 +59,11 @@ function itemCounts(tracks, type) {
   return counts;
 }
 
+function detailHref(type, name, artist = '') {
+  const query = new URLSearchParams({ username, type, name, artist });
+  return `detail.html?${query.toString()}`;
+}
+
 function renderInsights(containerId, groups, emptyMessage) {
   const container = document.getElementById(containerId);
   container.replaceChildren();
@@ -73,7 +78,8 @@ function renderInsights(containerId, groups, emptyMessage) {
     } else {
       entries.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, itemLimit).forEach(item => {
         const row = document.createElement('li');
-        const name = document.createElement('span'); name.className = 'name';
+        const name = document.createElement('a'); name.className = 'name';
+        name.href = detailHref(type === 'artists' ? 'artist' : type === 'albums' ? 'album' : 'track', item.name, item.artist);
         name.textContent = type === 'artists' ? item.name : `${item.name} — ${item.artist}`;
         const plays = document.createElement('span'); plays.className = 'plays'; plays.textContent = `${item.count} plays`;
         row.append(name, plays); list.append(row);
@@ -126,7 +132,8 @@ function renderList(id, entries) {
   }
   for (const item of entries.slice(0, itemLimit)) {
     const row = document.createElement('li');
-    const name = document.createElement('span'); name.className = 'name';
+    const name = document.createElement('a'); name.className = 'name';
+    name.href = detailHref(id === 'tracks' ? 'track' : id === 'albums' ? 'album' : 'artist', item.primary, item.secondary || '');
     name.textContent = item.primary;
     if (item.secondary) {
       const detail = document.createElement('span'); detail.className = 'muted';

@@ -80,20 +80,40 @@ try {
   }
 }
 
+const openSockets = new Set();
+server.on('connection', socket => {
+  openSockets.add(socket);
+  socket.on('close', () => openSockets.delete(socket));
+});
+
 // --- Graceful shutdown ------------------------------------------------------
+let shutdownStarted = false;
 async function shutdown() {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   logger.info('Server', 'Shutting down…');
   logger.info('Server', 'aborting downloads');
   for (const [, job] of activeDownloads) {
     if (job.abortController) {
-	    logger.info('Server', 'aborting job');
-	    job.abortController.abort();
+      logger.info('Server', 'aborting job');
+      job.abortController.abort();
     }
   }
+
+  // EventSource connections stay open for the lifetime of the page and would
+  // otherwise keep server.close() waiting indefinitely.
+  for (const clients of sseClients.values()) {
+    for (const client of clients) client.end();
+  }
+
   server.close(() => {
     logger.info('Server', 'Closed HTTP server');
     process.exit(0);
   });
+  // Stop keep-alive and other active HTTP connections so Ctrl-C can finish
+  // even when a browser still has the dashboard open.
+  server.closeAllConnections?.();
+  for (const socket of openSockets) socket.destroy();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

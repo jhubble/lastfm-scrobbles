@@ -26,6 +26,8 @@
     li { counter-increment: rank; border-bottom: 1px solid #323238; padding: 10px 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
     li::before { content: counter(rank); color: #85858f; font-variant-numeric: tabular-nums; }
     .name { overflow-wrap: anywhere; }
+    a.name { color: #f4f4f5; text-decoration: none; }
+    a.name:hover { color: #ff6870; text-decoration: underline; }
     .plays { color: #a8a8b3; white-space: nowrap; font-size: 13px; }
     .empty { color: #a8a8b3; }
     .loading { display: flex; align-items: center; gap: 10px; padding: 14px 16px; margin: 14px 0; background: #202024; border-radius: 8px; color: #d4d4d8; }
