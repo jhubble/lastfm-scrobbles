@@ -28,6 +28,13 @@
     .name { overflow-wrap: anywhere; }
     .plays { color: #a8a8b3; white-space: nowrap; font-size: 13px; }
     .empty { color: #a8a8b3; }
+    .section-nav { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 14px; }
+    .section-nav a { color: #ff6870; }
+    .insight-section { scroll-margin-top: 16px; }
+    .insight-section h2 { margin-bottom: 6px; }
+    .insight-section p { margin: 0 0 12px; }
+    .insight-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+    .insight-group h3 { font-size: 15px; margin: 4px 0; }
     @media (max-width: 600px) { body { padding: 14px; } .card { padding: 15px; } }
   </style>
 </head>
@@ -36,6 +43,9 @@
     <a class="muted" href="/">← Back to dashboard</a>
     <h1>Listening Analysis</h1>
     <div id="summary" class="muted">Loading scrobbles…</div>
+    <nav class="section-nav" aria-label="Analysis sections">
+      <a href="#newHits">New hits</a><a href="#lostFriends">Lost friends</a><a href="#justNow">Just now</a>
+    </nav>
     <section class="card">
       <div class="quick-links" id="quickLinks" aria-label="Quick time ranges"></div>
       <div class="period-links" id="monthLinks"></div>
@@ -56,6 +66,21 @@
       <section class="ranking"><h2>Top Albums</h2><ol id="albums"></ol></section>
       <section class="ranking"><h2>Top Artists</h2><ol id="artists"></ol></section>
     </div>
+    <section class="card insight-section" id="newHits">
+      <h2>New hits</h2>
+      <p class="muted">Popular items in this range that were absent from the immediately preceding range of equal length.</p>
+      <div class="insight-groups" id="newHitsLists"></div>
+    </section>
+    <section class="card insight-section" id="lostFriends">
+      <h2>Lost friends</h2>
+      <p class="muted">Your most played items from the loaded history that you did not listen to in this range.</p>
+      <div class="insight-groups" id="lostFriendsLists"></div>
+    </section>
+    <section class="card insight-section" id="justNow">
+      <h2>Just now</h2>
+      <p class="muted">Items listened to in this range, with no plays elsewhere in the loaded history.</p>
+      <div class="insight-groups" id="justNowLists"></div>
+    </section>
   </main>
   <script src="analysis.js"></script>
 </body>

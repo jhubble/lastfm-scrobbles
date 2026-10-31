@@ -40,6 +40,82 @@ function countItems(tracks, type) {
   }).sort((a, b) => b.count - a.count || a.primary.localeCompare(b.primary));
 }
 
+function itemCounts(tracks, type) {
+  const counts = new Map();
+  for (const track of tracks) {
+    const artist = textOf(track.artist, 'Unknown artist');
+    const title = textOf(track.name, 'Unknown track');
+    let key;
+    if (type === 'tracks') key = `${artist}\u0000${title}`;
+    else if (type === 'albums') {
+      const album = textOf(track.album);
+      if (!album) continue;
+      key = `${artist}\u0000${album}`;
+    } else key = artist;
+    const item = counts.get(key) || { key, artist, name: type === 'tracks' ? title : type === 'albums' ? textOf(track.album) : artist, count: 0 };
+    item.count++;
+    counts.set(key, item);
+  }
+  return counts;
+}
+
+function renderInsights(containerId, groups, emptyMessage) {
+  const container = document.getElementById(containerId);
+  container.replaceChildren();
+  const types = [['tracks', 'Tracks'], ['albums', 'Albums'], ['artists', 'Artists']];
+  for (const [type, title] of types) {
+    const section = document.createElement('div'); section.className = 'insight-group';
+    const heading = document.createElement('h3'); heading.textContent = title; section.append(heading);
+    const list = document.createElement('ol');
+    const entries = groups[type] || [];
+    if (!entries.length) {
+      const empty = document.createElement('li'); empty.className = 'empty'; empty.textContent = emptyMessage; list.append(empty);
+    } else {
+      entries.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, itemLimit).forEach(item => {
+        const row = document.createElement('li');
+        const name = document.createElement('span'); name.className = 'name';
+        name.textContent = type === 'artists' ? item.name : `${item.name} — ${item.artist}`;
+        const plays = document.createElement('span'); plays.className = 'plays'; plays.textContent = `${item.count} plays`;
+        row.append(name, plays); list.append(row);
+      });
+    }
+    section.append(list); container.append(section);
+  }
+}
+
+function updateInsights(currentTracks) {
+  const dated = scrobbles.map(track => ({ track, date: scrobbleDate(track) })).filter(item => item.date);
+  const currentIds = {};
+  const historyIds = {};
+  const previousIds = {};
+  const currentStart = activeRange.start.getTime();
+  const currentEnd = activeRange.end.getTime();
+  const duration = currentEnd - currentStart + 1;
+  const previousStart = currentStart - duration;
+  const previousEnd = currentStart - 1;
+  for (const type of ['tracks', 'albums', 'artists']) {
+    currentIds[type] = itemCounts(currentTracks, type);
+    historyIds[type] = itemCounts(dated.map(item => item.track), type);
+    previousIds[type] = itemCounts(dated.filter(item => item.date.getTime() >= previousStart && item.date.getTime() <= previousEnd).map(item => item.track), type);
+  }
+
+  const newHits = {}, lostFriends = {}, justNow = {};
+  for (const type of ['tracks', 'albums', 'artists']) {
+    newHits[type] = activeRange.label === 'All time'
+      ? []
+      : [...currentIds[type].values()].filter(item => !previousIds[type].has(item.key));
+    lostFriends[type] = [...historyIds[type].values()].filter(item => !currentIds[type].has(item.key));
+    justNow[type] = [...currentIds[type].values()].filter(item => {
+      const total = historyIds[type].get(item.key);
+      return total && total.count === item.count;
+    });
+  }
+  const noPreviousRange = activeRange.label === 'All time';
+  renderInsights('newHitsLists', newHits, noPreviousRange ? 'No preceding range to compare.' : 'No new items in this range.');
+  renderInsights('lostFriendsLists', lostFriends, 'No absent items found.');
+  renderInsights('justNowLists', justNow, 'No items unique to this range.');
+}
+
 function renderList(id, entries) {
   const list = document.getElementById(id);
   list.replaceChildren();
@@ -71,6 +147,7 @@ function updateAnalysis() {
   renderList('tracks', countItems(filtered, 'tracks'));
   renderList('albums', countItems(filtered, 'albums'));
   renderList('artists', countItems(filtered, 'artists'));
+  updateInsights(filtered);
   document.querySelectorAll('[data-range]').forEach(button => button.classList.toggle('active', button.dataset.range === activeRange.label));
 }
 
