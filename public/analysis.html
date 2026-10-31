@@ -28,13 +28,18 @@
     .name { overflow-wrap: anywhere; }
     .plays { color: #a8a8b3; white-space: nowrap; font-size: 13px; }
     .empty { color: #a8a8b3; }
+    .loading { display: flex; align-items: center; gap: 10px; padding: 14px 16px; margin: 14px 0; background: #202024; border-radius: 8px; color: #d4d4d8; }
+    .spinner { width: 18px; height: 18px; border: 2px solid #484850; border-top-color: #e5151f; border-radius: 50%; animation: spin 0.8s linear infinite; flex: 0 0 auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .section-nav { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 14px; }
     .section-nav a { color: #ff6870; }
     .insight-section { scroll-margin-top: 16px; }
     .insight-section h2 { margin-bottom: 6px; }
     .insight-section p { margin: 0 0 12px; }
     .insight-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-    .insight-group h3 { font-size: 15px; margin: 4px 0; }
+    .insight-group h3 { font-size: 15px; margin: 4px 0 12px; }
+    .insight-group ol { margin: 0; padding: 0; }
+    .insight-group li { padding: 10px 0; }
     @media (max-width: 600px) { body { padding: 14px; } .card { padding: 15px; } }
   </style>
 </head>
@@ -43,6 +48,9 @@
     <a class="muted" href="/">← Back to dashboard</a>
     <h1>Listening Analysis</h1>
     <div id="summary" class="muted">Loading scrobbles…</div>
+    <div id="loadingIndicator" class="loading" role="status" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span><span id="loadingMessage">Loading your scrobbles and preparing analysis…</span>
+    </div>
     <nav class="section-nav" aria-label="Analysis sections">
       <a href="#newHits">New hits</a><a href="#lostFriends">Lost friends</a><a href="#justNow">Just now</a>
     </nav>

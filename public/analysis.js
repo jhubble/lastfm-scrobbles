@@ -214,12 +214,16 @@ document.getElementById('applyLimit').addEventListener('click', () => {
 });
 
 async function loadScrobbles() {
+  const loading = document.getElementById('loadingIndicator');
+  const loadingMessage = document.getElementById('loadingMessage');
+  if (loading) loading.style.display = 'flex';
   if (!username) throw new Error('No username was provided. Return to the dashboard and load a user first.');
   const cached = sessionStorage.getItem(`lastfm_scrobbles_${username.toLowerCase()}`);
   if (cached) {
     try { scrobbles = JSON.parse(cached); } catch { scrobbles = []; }
   }
   if (!scrobbles.length) {
+    if (loadingMessage) loadingMessage.textContent = 'Fetching locally stored scrobbles…';
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}`);
     if (!response.ok) throw new Error(`Could not load scrobbles (HTTP ${response.status}).`);
     const data = await response.json();
@@ -227,10 +231,15 @@ async function loadScrobbles() {
     scrobbles = data.scrobbles;
     try { sessionStorage.setItem(`lastfm_scrobbles_${username.toLowerCase()}`, JSON.stringify(scrobbles)); } catch {}
   }
+  if (loadingMessage) loadingMessage.textContent = 'Preparing rankings and time period shortcuts…';
+  await new Promise(resolve => requestAnimationFrame(resolve));
   buildShortcuts(); updateAnalysis();
+  if (loading) loading.style.display = 'none';
 }
 
 loadScrobbles().catch(error => {
+  const loading = document.getElementById('loadingIndicator');
+  if (loading) loading.style.display = 'none';
   document.getElementById('summary').textContent = error.message;
   document.getElementById('summary').classList.add('empty');
 });
