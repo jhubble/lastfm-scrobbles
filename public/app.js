@@ -402,7 +402,26 @@ async function fetchLocalData(silent = false) {
     data.scrobbles.slice(-20).reverse().forEach(track => {
       const li = document.createElement('li');
       const date = new Date(Number(track.date.uts) * 1000).toLocaleString();
-      li.innerHTML = `<span><strong>${track.artist['#text']}</strong> - ${track.name}</span><small>${date}</small>`;
+      const artist = typeof track.artist === 'string'
+        ? track.artist
+        : track.artist?.['#text'] || track.artist?.name || 'Unknown artist';
+      const album = typeof track.album === 'string'
+        ? track.album
+        : track.album?.['#text'] || track.album?.name || 'Unknown album';
+      const main = document.createElement('div');
+      main.className = 'scrobble-main';
+      const title = document.createElement('strong');
+      title.className = 'scrobble-track';
+      title.textContent = `${artist} — ${track.name || 'Unknown track'}`;
+      const albumLabel = document.createElement('span');
+      albumLabel.className = 'scrobble-album';
+      albumLabel.textContent = `Album: ${album}`;
+      const dateLabel = document.createElement('time');
+      dateLabel.className = 'scrobble-date';
+      dateLabel.dateTime = new Date(Number(track.date.uts) * 1000).toISOString();
+      dateLabel.textContent = date;
+      main.append(title, albumLabel);
+      li.append(main, dateLabel);
       list.appendChild(li);
     });
 

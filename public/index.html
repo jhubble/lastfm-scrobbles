@@ -195,6 +195,46 @@
       justify-content: space-between;
       gap: 10px;
     }
+    #scrobbleList li {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 4px 18px;
+      padding: 12px 4px;
+    }
+    .scrobble-main {
+      min-width: 0;
+    }
+    .scrobble-track {
+      display: block;
+      color: #f4f4f5;
+      font-size: 14px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .scrobble-album {
+      display: block;
+      margin-top: 3px;
+      color: #a8a8b3;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .scrobble-date {
+      color: #8b8b96;
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    @media (max-width: 600px) {
+      #scrobbleList li {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 5px;
+      }
+      .scrobble-date {
+        text-align: left;
+      }
+    }
 
     /* Throttle & Network Error Styles */
     .throttle-bar {
