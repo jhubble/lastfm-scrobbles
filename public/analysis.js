@@ -91,7 +91,10 @@ function renderInsights(containerId, groups, emptyMessage) {
 }
 
 function updateInsights(currentTracks) {
-  const dated = scrobbles.map(track => ({ track, date: scrobbleDate(track) })).filter(item => item.date);
+  const categoryScopedScrobbles = categoryFilter === 'all'
+    ? scrobbles
+    : scrobbles.filter(track => ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter));
+  const dated = categoryScopedScrobbles.map(track => ({ track, date: scrobbleDate(track) })).filter(item => item.date);
   const currentIds = {};
   const historyIds = {};
   const previousIds = {};
@@ -143,34 +146,36 @@ function renderList(id, entries) {
     const plays = document.createElement('span'); plays.className = 'plays';
     plays.textContent = `${item.count} ${item.count === 1 ? 'play' : 'plays'}`;
     row.append(name, plays); list.append(row);
-    if (id === 'tracks') {
-      const sample = scrobbles.find(track => textOf(track.artist, 'Unknown artist') === (item.secondary || '') && textOf(track.name, 'Unknown track') === item.primary);
-      if (sample) {
-        const control = document.createElement('select'); control.setAttribute('aria-label', `Category for ${item.primary}`);
-        for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook']]) {
-          const option = document.createElement('option'); option.value = value; option.textContent = label;
-          option.selected = ScrobbleCategories.category(username, sample) === value; control.append(option);
-        }
-        control.addEventListener('change', async () => {
-          control.disabled = true;
-          try {
-            await ScrobbleCategories.setCategory(username, sample, control.value);
-            updateAnalysis();
-          } catch (error) {
-            alert(error.message);
-            updateAnalysis();
-          }
-        });
-        row.append(control);
-      }
+    const entityType = id === 'tracks' ? 'track' : id === 'albums' ? 'album' : 'artist';
+    const entity = { type: entityType, artist: id === 'artists' ? '' : item.secondary || '', name: item.primary };
+    const control = document.createElement('select');
+    control.className = 'category-select';
+    control.setAttribute('aria-label', `Category for ${item.primary}`);
+    const selectedCategory = ScrobbleCategories.entityCategory(entityType, entity.artist, entity.name, scrobbles);
+    const explicitCategory = ScrobbleCategories.entityOverride(entityType, entity.artist, entity.name);
+    for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label;
+      option.selected = value === 'auto' ? !explicitCategory : selectedCategory === value;
+      control.append(option);
     }
+    control.addEventListener('change', async () => {
+      control.disabled = true;
+      try {
+        await ScrobbleCategories.setCategory(username, entity, control.value);
+        updateAnalysis();
+      } catch (error) {
+        alert(error.message);
+        updateAnalysis();
+      }
+    });
+    row.append(control);
   }
 }
 
 function updateAnalysis() {
   const filtered = scrobbles.filter(track => {
     const date = scrobbleDate(track);
-    return date && date >= activeRange.start && date <= activeRange.end && (categoryFilter === 'all' || ScrobbleCategories.category(username, track) === categoryFilter);
+    return date && date >= activeRange.start && date <= activeRange.end && (categoryFilter === 'all' || ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter));
   });
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
   renderList('tracks', countItems(filtered, 'tracks'));

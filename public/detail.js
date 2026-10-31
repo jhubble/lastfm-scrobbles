@@ -19,7 +19,6 @@ const dateOf = track => {
 const formatDate = date => date ? date.toLocaleDateString() : '—';
 
 function matches(track) {
-  if (categoryFilter !== 'all' && ScrobbleCategories.category(username, track) !== categoryFilter) return false;
   if (type === 'artist') return norm(artistOf(track)) === norm(name);
   if (type === 'album') return norm(albumOf(track)) === norm(name) && norm(artistOf(track)) === norm(artist);
   return norm(titleOf(track)) === norm(name) && norm(artistOf(track)) === norm(artist);
@@ -167,7 +166,7 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
 }
 
 function render(scrobbles) {
-  const scoped = scrobbles.filter(track => categoryFilter === 'all' || ScrobbleCategories.category(username, track) === categoryFilter);
+  const scoped = scrobbles.filter(track => categoryFilter === 'all' || ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter));
   const selected = scoped.filter(matches);
   if (!selected.length) throw new Error('No listening history was found for this item.');
   const allEntries = entityEntries(scoped, type);
@@ -193,6 +192,33 @@ function render(scrobbles) {
   document.getElementById('title').textContent = displayName;
   document.getElementById('subtitle').textContent = type === 'artist' ? '' : `by ${artist}`;
   document.getElementById('stats').replaceChildren();
+  const entity = { type, artist: type === 'artist' ? '' : artist, name };
+  const entityTracks = scrobbles.filter(track => matches(track));
+  const foundCategories = new Set(entityTracks.flatMap(track => {
+    const value = ScrobbleCategories.category(username, track);
+    return value === 'both' ? ['music', 'audiobook'] : [value];
+  }));
+  const categoryLabel = foundCategories.size > 1 ? 'Music and audiobook' : foundCategories.has('audiobook') ? 'Audiobook' : 'Music';
+  appendStat('Category', categoryLabel);
+  const categoryControl = document.getElementById('entityCategory');
+  categoryControl.replaceChildren();
+  const currentCategory = ScrobbleCategories.entityCategory(type, entity.artist, name, scrobbles);
+  const explicitCategory = ScrobbleCategories.entityOverride(type, entity.artist, name);
+  for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
+    const option = document.createElement('option'); option.value = value; option.textContent = label;
+    option.selected = value === 'auto' ? !explicitCategory : currentCategory === value;
+    categoryControl.append(option);
+  }
+  categoryControl.onchange = async () => {
+    categoryControl.disabled = true;
+    try {
+      await ScrobbleCategories.setCategory(username, entity, categoryControl.value);
+      render(scrobbles);
+    } catch (error) {
+      alert(error.message);
+      render(scrobbles);
+    }
+  };
   appendStat('Total listens', selected.length.toLocaleString());
   const firstListened = selectedDates.reduce((first, date) => !first || date < first ? date : first, null);
   const lastListened = selectedDates.reduce((last, date) => !last || date > last ? date : last, null);

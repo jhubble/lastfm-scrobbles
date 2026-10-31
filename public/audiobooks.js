@@ -3,18 +3,17 @@
   const text = value => typeof value === 'string' ? value : value?.['#text'] || value?.name || '';
   const normalized = value => String(value || '').trim().toLocaleLowerCase();
   const identity = track => `${normalized(text(track.artist))}\u0000${normalized(track.name)}`;
-  let accountId = '';
   let overrides = {};
   let burstAlbums = new Set();
   const load = async username => {
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load audiobook categories.');
-    accountId = data.accountId;
     overrides = data.categories || {};
   };
   const audiobookPattern = /\b(audiobook|audio book|unabridged|abridged|narrated by|chapter\s*\d+|part\s*\d+|audible)\b/i;
   const albumIdentity = track => `${normalized(text(track.artist))}\u0000${normalized(text(track.album))}`;
+  const entityKey = (type, artist, name) => `${type}\u0000${normalized(artist)}\u0000${normalized(name)}`;
   const prepare = scrobbles => {
     const albums = new Map();
     for (const track of scrobbles) {
@@ -40,16 +39,29 @@
     if (audiobookPattern.test([text(track.artist), track.name, text(track.album)].join(' ')) || (title && album && title === album) || burstAlbums.has(albumIdentity(track))) return 'audiobook';
     return 'music';
   };
-  const category = (_username, track) => overrides[identity(track)] || guess(track);
-  const setCategory = async (username, track, value) => {
+  const category = (_username, track) => overrides[entityKey('track', text(track.artist), track.name)] || overrides[identity(track)] || overrides[entityKey('album', text(track.artist), text(track.album))] || overrides[entityKey('artist', '', text(track.artist))] || guess(track);
+  const includesCategory = (value, filter) => value === filter || value === 'both';
+  const entityOverride = (type, artist, name) => overrides[entityKey(type, artist, name)] || null;
+  const entityCategory = (type, artist, name, scrobbles) => {
+    const explicit = entityOverride(type, artist, name);
+    if (explicit) return explicit;
+    const selected = scrobbles.filter(track => type === 'artist'
+      ? normalized(text(track.artist)) === normalized(name)
+      : type === 'album'
+        ? normalized(text(track.artist)) === normalized(artist) && normalized(text(track.album)) === normalized(name)
+        : normalized(text(track.artist)) === normalized(artist) && normalized(track.name) === normalized(name));
+    const categories = new Set(selected.map(track => category('', track)));
+    if (categories.has('both') || (categories.has('music') && categories.has('audiobook'))) return 'both';
+    return categories.values().next().value || 'music';
+  };
+  const setCategory = async (username, entity, value) => {
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artist: text(track.artist), title: track.name, category: value === guess(track) ? 'auto' : value }),
+      body: JSON.stringify({ ...entity, category: value === 'auto' ? 'auto' : value }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');
-    accountId = data.accountId;
     overrides = data.categories || {};
   };
-  window.ScrobbleCategories = { load, prepare, category, setCategory, guess, get accountId() { return accountId; } };
+  window.ScrobbleCategories = { load, prepare, category, includesCategory, entityCategory, entityOverride, setCategory, guess };
 })();

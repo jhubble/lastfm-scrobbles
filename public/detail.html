@@ -26,6 +26,8 @@
     td:first-child { overflow-wrap: anywhere; }
     .related-items a { display: block; padding: 2px 0; }
     .count { white-space: nowrap; color: #a8a8b3; }
+    .category-editor { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+    .category-select { width: 140px; min-width: 140px; box-sizing: border-box; background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; }
     .loading { margin: 15px 0; padding: 14px; background: #202024; border-radius: 8px; }
     .empty { color: #a8a8b3; padding: 12px 0; }
     @media (max-width: 600px) { body { padding: 14px; } .card { padding: 15px; } th, td { padding: 8px 5px; font-size: 13px; } }
@@ -39,6 +41,7 @@
       <div class="muted" id="kindLabel"></div>
       <h1 id="title"></h1>
       <div class="muted" id="subtitle"></div>
+      <div class="category-editor"><label for="entityCategory">Categorize as</label><select id="entityCategory" class="category-select"></select></div>
       <section class="card">
         <h2>Listening history</h2>
         <div class="stats" id="stats"></div>
