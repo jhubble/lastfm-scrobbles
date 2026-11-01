@@ -72,8 +72,16 @@
       <div class="period-links" id="monthLinks"></div>
       <div class="period-links" id="yearLinks"></div>
       <div class="toolbar">
+        <label for="viewFilter">View</label>
+        <select id="viewFilter" aria-label="Analysis view"><option value="all">Aggregate</option><option value="tracks">Tracks only</option><option value="albums">Albums only</option><option value="artists">Artists only</option></select>
         <label for="categoryFilter">Show</label>
-        <select id="categoryFilter" aria-label="Report category"><option value="all">Everything</option><option value="music">Music</option><option value="audiobook">Audiobooks</option></select>
+        <select id="categoryFilter" aria-label="Report category">
+          <option value="all">Everything</option>
+          <option value="music">Music</option>
+          <option value="audiobook">Audiobooks · automatic and manual</option>
+          <option value="automatic_audiobook">Audiobooks · automatic only</option>
+          <option value="manual_audiobook">Audiobooks · manual only</option>
+        </select>
         <label for="startDate">Custom range</label>
         <input type="date" id="startDate" aria-label="Start date">
         <span>to</span>
@@ -85,9 +93,9 @@
       </div>
     </section>
     <div class="rankings">
-      <section class="ranking"><h2>Top Tracks</h2><ol id="tracks"></ol></section>
-      <section class="ranking"><h2>Top Albums</h2><ol id="albums"></ol></section>
-      <section class="ranking"><h2>Top Artists</h2><ol id="artists"></ol></section>
+      <section class="ranking" data-ranking="tracks"><h2>Top Tracks</h2><ol id="tracks"></ol></section>
+      <section class="ranking" data-ranking="albums"><h2>Top Albums</h2><ol id="albums"></ol></section>
+      <section class="ranking" data-ranking="artists"><h2>Top Artists</h2><ol id="artists"></ol></section>
     </div>
     <section class="card insight-section" id="newHits">
       <h2>New hits</h2>

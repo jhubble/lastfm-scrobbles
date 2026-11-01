@@ -93,16 +93,18 @@
     const fromMusicBrainz = musicBrainzCategory('', track);
     return fromMusicBrainz !== 'unknown' ? fromMusicBrainz : guess(track);
   };
-  const category = (username, track) => {
+  const classification = (username, track) => {
     const variants = window.ScrobbleVariants;
     const rawArtist = text(track.artist);
     const artist = variants?.resolveArtist(rawArtist) || rawArtist;
     const title = variants?.resolveTrack(rawArtist, track.name) || track.name;
     const album = variants?.resolveAlbum(rawArtist, text(track.album)) || text(track.album);
     const artistCategory = overrides[entityKey('artist', '', artist)] || overrides[entityKey('artist', '', rawArtist)];
-    if (artistCategory === 'music' || artistCategory === 'audiobook') return artistCategory;
-    return overrides[entityKey('track', artist, title)] || overrides[entityKey('track', rawArtist, track.name)] || overrides[identity(track)] || overrides[entityKey('album', artist, album)] || overrides[entityKey('album', rawArtist, text(track.album))] || automaticCategory(track);
+    if (artistCategory === 'music' || artistCategory === 'audiobook') return { category: artistCategory, source: 'manual' };
+    const manualCategory = overrides[entityKey('track', artist, title)] || overrides[entityKey('track', rawArtist, track.name)] || overrides[identity(track)] || overrides[entityKey('album', artist, album)] || overrides[entityKey('album', rawArtist, text(track.album))];
+    return manualCategory ? { category: manualCategory, source: 'manual' } : { category: automaticCategory(track), source: 'automatic' };
   };
+  const category = (username, track) => classification(username, track).category;
   const includesCategory = (value, filter) => value === filter || value === 'both';
   const entityOverride = (type, artist, name) => {
     const direct = overrides[entityKey(type, artist, name)];
@@ -183,5 +185,5 @@
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');
     overrides = data.categories || {};
   };
-  window.ScrobbleCategories = { load, prepare, category, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, inheritedArtistCategory, setCategory, guess };
+  window.ScrobbleCategories = { load, prepare, category, classification, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, inheritedArtistCategory, setCategory, guess };
 })();

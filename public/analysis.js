@@ -4,6 +4,7 @@ document.getElementById('similarityLink').href = `similarity.html?username=${enc
 let scrobbles = [];
 let itemLimit = 25;
 let categoryFilter = 'all';
+let viewMode = 'all';
 let activeRange = { start: new Date(Date.now() - 30 * 86400000), end: new Date(), label: 'Last 30 days' };
 let analysisUpdateId = 0;
 const nextAnalysisFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
@@ -56,7 +57,7 @@ function keyForDate(date, granularity) {
   return granularity === 'month' ? `${y}-${m}` : String(y);
 }
 
-function incrementRankingCounts(counts, track) {
+function incrementRankingCounts(counts, track, selectedType = 'all') {
   const rawArtist = textOf(track.artist, 'Unknown artist');
   const artist = ScrobbleVariants.resolveArtist(rawArtist);
   const title = ScrobbleVariants.resolveTrack(rawArtist, textOf(track.name, 'Unknown track'));
@@ -67,6 +68,7 @@ function incrementRankingCounts(counts, track) {
     ['artists', artist, artist, ''],
   ];
   for (const [type, key, primary, secondary] of values) {
+    if (selectedType !== 'all' && type !== selectedType) continue;
     const item = counts[type].get(key) || { primary, secondary, count: 0 };
     item.count++;
     counts[type].set(key, item);
@@ -81,14 +83,16 @@ function finishRankingCounts(counts) {
 }
 
 function detailHref(type, name, artist = '') {
-  const query = new URLSearchParams({ username, type, name, artist, category: categoryFilter });
+  const detailCategory = ['automatic_audiobook', 'manual_audiobook'].includes(categoryFilter) ? 'audiobook' : categoryFilter;
+  const query = new URLSearchParams({ username, type, name, artist, category: detailCategory });
   return `detail.html?${query.toString()}`;
 }
 
 function renderInsights(containerId, groups, emptyMessage) {
   const container = document.getElementById(containerId);
   container.replaceChildren();
-  const types = [['tracks', 'Tracks'], ['albums', 'Albums'], ['artists', 'Artists']];
+  const allTypes = [['tracks', 'Tracks'], ['albums', 'Albums'], ['artists', 'Artists']];
+  const types = viewMode === 'all' ? allTypes : allTypes.filter(([type]) => type === viewMode);
   for (const [type, title] of types) {
     const section = document.createElement('div'); section.className = 'insight-group';
     const heading = document.createElement('h3'); heading.textContent = title; section.append(heading);
@@ -111,7 +115,7 @@ function renderInsights(containerId, groups, emptyMessage) {
 }
 
 async function updateInsights(categoryScopedScrobbles, updateId) {
-  const types = ['tracks', 'albums', 'artists'];
+  const types = viewMode === 'all' ? ['tracks', 'albums', 'artists'] : [viewMode];
   const counts = Object.fromEntries(types.map(type => [type, {
     current: new Map(), history: new Map(), previous: new Map(),
   }]));
@@ -252,12 +256,23 @@ async function updateAnalysis() {
     const end = Math.min(start + 5000, scrobbles.length);
     for (let i = start; i < end; i++) {
       const track = scrobbles[i];
-      if (categoryFilter !== 'all' && !ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter)) continue;
+      if (categoryFilter !== 'all') {
+        const classification = ScrobbleCategories.classification(username, track);
+        const isAudiobook = ScrobbleCategories.includesCategory(classification.category, 'audiobook');
+        const matches = categoryFilter === 'music'
+          ? ScrobbleCategories.includesCategory(classification.category, 'music')
+          : categoryFilter === 'audiobook'
+            ? isAudiobook
+            : categoryFilter === 'automatic_audiobook'
+              ? isAudiobook && classification.source === 'automatic'
+              : isAudiobook && classification.source === 'manual';
+        if (!matches) continue;
+      }
       categoryScoped.push(track);
       const date = scrobbleDate(track);
       if (date && date >= activeRange.start && date <= activeRange.end) {
         filtered.push(track);
-        incrementRankingCounts(rankingCounts, track);
+        incrementRankingCounts(rankingCounts, track, viewMode);
       }
     }
     if (updateId !== analysisUpdateId) return;
@@ -270,6 +285,7 @@ async function updateAnalysis() {
 
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
   const rankings = finishRankingCounts(rankingCounts);
+  document.querySelectorAll('[data-ranking]').forEach(section => { section.hidden = viewMode !== 'all' && section.dataset.ranking !== viewMode; });
   renderList('tracks', rankings.tracks);
   renderList('albums', rankings.albums);
   renderList('artists', rankings.artists);
@@ -283,6 +299,7 @@ async function updateAnalysis() {
 }
 
 document.getElementById('categoryFilter').addEventListener('change', event => { categoryFilter = event.target.value; updateAnalysis(); });
+document.getElementById('viewFilter').addEventListener('change', event => { viewMode = event.target.value; updateAnalysis(); });
 document.getElementById('updateAnalysisView').addEventListener('click', () => updateAnalysis());
 
 function setRollingRange(days, label) {
