@@ -290,7 +290,22 @@ function setRollingRange(days, label) {
 
 function addShortcut(container, label, onClick) {
   const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
-  button.dataset.range = label; button.addEventListener('click', onClick); container.append(button);
+  button.dataset.range = label;
+  button.addEventListener('click', () => {
+    if (!applyItemsPerList()) return;
+    onClick();
+  });
+  container.append(button);
+}
+
+function applyItemsPerList() {
+  const value = Number(document.getElementById('itemLimit').value);
+  if (!Number.isInteger(value) || value < 1 || value > 500) {
+    alert('Choose between 1 and 500 items.');
+    return false;
+  }
+  itemLimit = value;
+  return true;
 }
 
 function buildShortcuts() {
@@ -346,9 +361,7 @@ document.getElementById('applyRange').addEventListener('click', () => {
 });
 
 document.getElementById('applyLimit').addEventListener('click', () => {
-  const value = Number(document.getElementById('itemLimit').value);
-  if (!Number.isInteger(value) || value < 1 || value > 500) return alert('Choose between 1 and 500 items.');
-  itemLimit = value; updateAnalysis();
+  if (applyItemsPerList()) updateAnalysis();
 });
 
 async function loadScrobbles() {
