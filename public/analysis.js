@@ -209,6 +209,9 @@ function renderList(id, entries) {
     const control = document.createElement('select');
     control.className = 'category-select';
     control.setAttribute('aria-label', `Category for ${item.primary}`);
+    control.dataset.entityType = entityType;
+    control.dataset.entityArtist = entity.artist;
+    control.dataset.entityName = entity.name;
     const selectedCategory = ScrobbleCategories.entityCategory(entityType, entity.artist, entity.name, scrobbles);
     const automaticCategory = ScrobbleCategories.automaticEntityCategory(entityType, entity.artist, entity.name, scrobbles);
     const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
@@ -301,6 +304,28 @@ async function updateAnalysis() {
 document.getElementById('categoryFilter').addEventListener('change', event => { categoryFilter = event.target.value; updateAnalysis(); });
 document.getElementById('viewFilter').addEventListener('change', event => { viewMode = event.target.value; updateAnalysis(); });
 document.getElementById('updateAnalysisView').addEventListener('click', () => updateAnalysis());
+document.getElementById('applyBulkCategory').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const controls = [...document.querySelectorAll('[data-ranking]:not([hidden]) .category-select')];
+  const entities = controls.map(control => ({
+    type: control.dataset.entityType,
+    artist: control.dataset.entityArtist,
+    name: control.dataset.entityName,
+  }));
+  if (!entities.length) return alert('There are no visible results to classify.');
+  const category = document.getElementById('bulkCategory').value;
+  if (!confirm(`Apply ${category === 'auto' ? 'Automatic' : category} classification to ${entities.length} visible results?`)) return;
+  button.disabled = true;
+  try {
+    await ScrobbleCategories.setCategories(username, entities, category);
+    ScrobbleCategories.prepare(scrobbles);
+    await updateAnalysis();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 function setRollingRange(days, label) {
   const end = new Date();

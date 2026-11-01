@@ -185,5 +185,14 @@
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');
     overrides = data.categories || {};
   };
-  window.ScrobbleCategories = { load, prepare, category, classification, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, inheritedArtistCategory, setCategory, guess };
+  const setCategories = async (username, entities, value) => {
+    const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories/bulk`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entities, category: value }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save bulk categories.');
+    overrides = data.categories || {};
+  };
+  window.ScrobbleCategories = { load, prepare, category, classification, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, inheritedArtistCategory, setCategory, setCategories, guess };
 })();

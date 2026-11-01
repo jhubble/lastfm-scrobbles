@@ -959,6 +959,32 @@ app.put('/api/scrobbles/:username/categories', async (req, res) => {
   }
 });
 
+app.put('/api/scrobbles/:username/categories/bulk', async (req, res) => {
+  const { entities, category } = req.body || {};
+  if (!Array.isArray(entities) || !entities.length || entities.length > 1500 || !['music', 'audiobook', 'both', 'auto'].includes(category)) {
+    return res.status(400).json({ error: 'Provide 1 to 1500 entities and a valid category.' });
+  }
+  if (entities.some(entity => !['track', 'album', 'artist'].includes(entity?.type)
+    || typeof entity.name !== 'string' || !entity.name.trim()
+    || (entity.type !== 'artist' && (typeof entity.artist !== 'string' || !entity.artist.trim())))) {
+    return res.status(400).json({ error: 'Every entity must have a valid type, name, and artist where required.' });
+  }
+  try {
+    const username = req.params.username.trim();
+    const categories = await loadCategories(username);
+    for (const entity of entities) {
+      const key = `${entity.type}\u0000${String(entity.artist || '').trim().toLocaleLowerCase()}\u0000${entity.name.trim().toLocaleLowerCase()}`;
+      if (category === 'auto') delete categories[key];
+      else categories[key] = category;
+    }
+    await fs.writeFile(getCategoryFilePath(username), JSON.stringify(categories, null, 2));
+    return res.json({ username, categories, updated: entities.length });
+  } catch (err) {
+    logger.error('Categories', `Could not bulk-save local categories for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/scrobbles/:username', async (req, res) => {
   const username = req.params.username.trim();
   const scrobbles = await loadScrobbles(username);
