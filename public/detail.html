@@ -33,6 +33,17 @@
     .category-editor { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
     .category-select { width: 140px; min-width: 140px; box-sizing: border-box; background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; }
     .loading { margin: 15px 0; padding: 14px; background: #202024; border-radius: 8px; }
+    .loading-heading { display: flex; align-items: center; gap: 12px; font-weight: 600; }
+    .loading-spinner { width: 20px; height: 20px; flex: 0 0 20px; border: 3px solid #48404d; border-top-color: #ff6870; border-radius: 50%; animation: detail-spin .8s linear infinite; }
+    @keyframes detail-spin { to { transform: rotate(360deg); } }
+    .loading-steps { list-style: none; padding: 0; margin: 15px 0 0 32px; color: #777780; }
+    .loading-step { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
+    .loading-step-icon { width: 16px; text-align: center; color: #777780; }
+    .loading-step.is-active { color: #f3d7d9; }
+    .loading-step.is-active .loading-step-icon { color: #ff6870; }
+    .loading-step.is-complete { color: #a8a8b3; }
+    .loading-step.is-complete .loading-step-icon { color: #4ade80; }
+    .loading[data-state="error"] { border: 1px solid #7f1d1d; color: #fca5a5; }
     .empty { color: #a8a8b3; padding: 12px 0; }
     @media (max-width: 600px) { body { padding: 14px; } .card { padding: 15px; } th, td { padding: 8px 5px; font-size: 13px; } }
   </style>
@@ -40,7 +51,16 @@
 <body>
   <main>
     <a href="analysis.html" id="backLink">← Back to analysis</a>
-    <div id="loading" class="loading" role="status">Loading listening details…</div>
+    <div id="loading" class="loading" role="status" aria-live="polite" aria-busy="true">
+      <div class="loading-heading"><span id="loadingSpinner" class="loading-spinner" aria-hidden="true"></span><span id="loadingMessage">Loading listening details…</span></div>
+      <ol class="loading-steps">
+        <li class="loading-step" data-loading-step="1"><span class="loading-step-icon">○</span><span>Check the detail request</span></li>
+        <li class="loading-step" data-loading-step="2"><span class="loading-step-icon">○</span><span>Load saved scrobbles</span></li>
+        <li class="loading-step" data-loading-step="3"><span class="loading-step-icon">○</span><span>Load music and audiobook categories</span></li>
+        <li class="loading-step" data-loading-step="4"><span class="loading-step-icon">○</span><span>Build listening history and related items</span></li>
+        <li class="loading-step" data-loading-step="5"><span class="loading-step-icon">○</span><span>Load cached MusicBrainz details</span></li>
+      </ol>
+    </div>
     <div id="content" hidden>
       <div class="muted" id="kindLabel"></div>
       <h1 id="title"></h1>

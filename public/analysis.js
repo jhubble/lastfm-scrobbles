@@ -4,6 +4,24 @@ let scrobbles = [];
 let itemLimit = 25;
 let categoryFilter = 'all';
 let activeRange = { start: new Date(Date.now() - 30 * 86400000), end: new Date(), label: 'Last 30 days' };
+let analysisUpdateId = 0;
+const nextAnalysisFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+
+function setAnalysisLoading(message) {
+  const indicator = document.getElementById('loadingIndicator');
+  if (!indicator) return;
+  indicator.style.display = 'flex';
+  indicator.setAttribute('aria-busy', 'true');
+  document.getElementById('loadingMessage').textContent = message;
+}
+
+function finishAnalysisLoading(updateId) {
+  if (updateId !== analysisUpdateId) return;
+  const indicator = document.getElementById('loadingIndicator');
+  if (!indicator) return;
+  indicator.style.display = 'none';
+  indicator.setAttribute('aria-busy', 'false');
+}
 
 function textOf(value, fallback = '') {
   if (typeof value === 'string') return value.trim() || fallback;
@@ -21,43 +39,27 @@ function keyForDate(date, granularity) {
   return granularity === 'month' ? `${y}-${m}` : String(y);
 }
 
-function countItems(tracks, type) {
-  const counts = new Map();
-  for (const track of tracks) {
-    const artist = textOf(track.artist, 'Unknown artist');
-    const title = textOf(track.name, 'Unknown track');
-    let label;
-    if (type === 'tracks') label = `${artist}\u0000${title}`;
-    else if (type === 'albums') {
-      const album = textOf(track.album);
-      if (!album) continue;
-      label = `${artist}\u0000${album}`;
-    } else label = artist;
-    counts.set(label, (counts.get(label) || 0) + 1);
+function incrementRankingCounts(counts, track) {
+  const artist = textOf(track.artist, 'Unknown artist');
+  const title = textOf(track.name, 'Unknown track');
+  const album = textOf(track.album);
+  const values = [
+    ['tracks', `${artist}\u0000${title}`, title, artist],
+    ...(album ? [['albums', `${artist}\u0000${album}`, album, artist]] : []),
+    ['artists', artist, artist, ''],
+  ];
+  for (const [type, key, primary, secondary] of values) {
+    const item = counts[type].get(key) || { primary, secondary, count: 0 };
+    item.count++;
+    counts[type].set(key, item);
   }
-  return [...counts.entries()].map(([key, count]) => {
-    const parts = key.split('\u0000');
-    return { primary: type === 'artists' ? parts[0] : parts[1], secondary: type === 'artists' ? '' : parts[0], count };
-  }).sort((a, b) => b.count - a.count || a.primary.localeCompare(b.primary));
 }
 
-function itemCounts(tracks, type) {
-  const counts = new Map();
-  for (const track of tracks) {
-    const artist = textOf(track.artist, 'Unknown artist');
-    const title = textOf(track.name, 'Unknown track');
-    let key;
-    if (type === 'tracks') key = `${artist}\u0000${title}`;
-    else if (type === 'albums') {
-      const album = textOf(track.album);
-      if (!album) continue;
-      key = `${artist}\u0000${album}`;
-    } else key = artist;
-    const item = counts.get(key) || { key, artist, name: type === 'tracks' ? title : type === 'albums' ? textOf(track.album) : artist, count: 0 };
-    item.count++;
-    counts.set(key, item);
-  }
-  return counts;
+function finishRankingCounts(counts) {
+  return Object.fromEntries(Object.entries(counts).map(([type, values]) => [
+    type,
+    [...values.values()].sort((a, b) => b.count - a.count || a.primary.localeCompare(b.primary)),
+  ]));
 }
 
 function detailHref(type, name, artist = '') {
@@ -90,33 +92,65 @@ function renderInsights(containerId, groups, emptyMessage) {
   }
 }
 
-function updateInsights(currentTracks) {
-  const categoryScopedScrobbles = categoryFilter === 'all'
-    ? scrobbles
-    : scrobbles.filter(track => ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter));
-  const dated = categoryScopedScrobbles.map(track => ({ track, date: scrobbleDate(track) })).filter(item => item.date);
-  const currentIds = {};
-  const historyIds = {};
-  const previousIds = {};
+async function updateInsights(categoryScopedScrobbles, updateId) {
+  const types = ['tracks', 'albums', 'artists'];
+  const counts = Object.fromEntries(types.map(type => [type, {
+    current: new Map(), history: new Map(), previous: new Map(),
+  }]));
   const currentStart = activeRange.start.getTime();
   const currentEnd = activeRange.end.getTime();
   const duration = currentEnd - currentStart + 1;
   const previousStart = currentStart - duration;
   const previousEnd = currentStart - 1;
-  for (const type of ['tracks', 'albums', 'artists']) {
-    currentIds[type] = itemCounts(currentTracks, type);
-    historyIds[type] = itemCounts(dated.map(item => item.track), type);
-    previousIds[type] = itemCounts(dated.filter(item => item.date.getTime() >= previousStart && item.date.getTime() <= previousEnd).map(item => item.track), type);
+
+  const addCount = (map, key, artist, itemName) => {
+    const item = map.get(key) || { key, artist, name: itemName, count: 0 };
+    item.count++;
+    map.set(key, item);
+  };
+  for (let start = 0; start < categoryScopedScrobbles.length; start += 5000) {
+    const end = Math.min(start + 5000, categoryScopedScrobbles.length);
+    for (let i = start; i < end; i++) {
+      const track = categoryScopedScrobbles[i];
+      const date = scrobbleDate(track);
+      if (!date) continue;
+      const time = date.getTime();
+      const current = time >= currentStart && time <= currentEnd;
+      const previous = time >= previousStart && time <= previousEnd;
+      const artist = textOf(track.artist, 'Unknown artist');
+      const title = textOf(track.name, 'Unknown track');
+      const album = textOf(track.album);
+      const values = {
+        tracks: [`${artist}\u0000${title}`, artist, title],
+        albums: album ? [`${artist}\u0000${album}`, artist, album] : null,
+        artists: [artist, artist, artist],
+      };
+      for (const type of types) {
+        const entry = values[type];
+        if (!entry) continue;
+        const [key, itemArtist, itemName] = entry;
+        addCount(counts[type].history, key, itemArtist, itemName);
+        if (current) addCount(counts[type].current, key, itemArtist, itemName);
+        if (previous) addCount(counts[type].previous, key, itemArtist, itemName);
+      }
+    }
+    if (updateId !== analysisUpdateId) return false;
+    if (end < categoryScopedScrobbles.length) {
+      setAnalysisLoading(`Comparing listening patterns… ${end.toLocaleString()} of ${categoryScopedScrobbles.length.toLocaleString()} scrobbles`);
+      await nextAnalysisFrame();
+      if (updateId !== analysisUpdateId) return false;
+    }
   }
 
   const newHits = {}, lostFriends = {}, justNow = {};
-  for (const type of ['tracks', 'albums', 'artists']) {
+  for (const type of types) {
+    const { current, history, previous } = counts[type];
     newHits[type] = activeRange.label === 'All time'
       ? []
-      : [...currentIds[type].values()].filter(item => !previousIds[type].has(item.key));
-    lostFriends[type] = [...historyIds[type].values()].filter(item => !currentIds[type].has(item.key));
-    justNow[type] = [...currentIds[type].values()].filter(item => {
-      const total = historyIds[type].get(item.key);
+      : [...current.values()].filter(item => !previous.has(item.key));
+    lostFriends[type] = [...history.values()].filter(item => !current.has(item.key));
+    justNow[type] = [...current.values()].filter(item => {
+      const total = history.get(item.key);
       return total && total.count === item.count;
     });
   }
@@ -124,6 +158,7 @@ function updateInsights(currentTracks) {
   renderInsights('newHitsLists', newHits, noPreviousRange ? 'No preceding range to compare.' : 'No new items in this range.');
   renderInsights('lostFriendsLists', lostFriends, 'No absent items found.');
   renderInsights('justNowLists', justNow, 'No items unique to this range.');
+  return true;
 }
 
 function renderList(id, entries) {
@@ -172,17 +207,45 @@ function renderList(id, entries) {
   }
 }
 
-function updateAnalysis() {
-  const filtered = scrobbles.filter(track => {
-    const date = scrobbleDate(track);
-    return date && date >= activeRange.start && date <= activeRange.end && (categoryFilter === 'all' || ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter));
-  });
+async function updateAnalysis() {
+  const updateId = ++analysisUpdateId;
+  setAnalysisLoading('Filtering scrobbles for the selected time range…');
+  await nextAnalysisFrame();
+  const filtered = [];
+  const categoryScoped = [];
+  const rankingCounts = { tracks: new Map(), albums: new Map(), artists: new Map() };
+  for (let start = 0; start < scrobbles.length; start += 5000) {
+    const end = Math.min(start + 5000, scrobbles.length);
+    for (let i = start; i < end; i++) {
+      const track = scrobbles[i];
+      if (categoryFilter !== 'all' && !ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter)) continue;
+      categoryScoped.push(track);
+      const date = scrobbleDate(track);
+      if (date && date >= activeRange.start && date <= activeRange.end) {
+        filtered.push(track);
+        incrementRankingCounts(rankingCounts, track);
+      }
+    }
+    if (updateId !== analysisUpdateId) return;
+    if (end < scrobbles.length) {
+      setAnalysisLoading(`Filtering scrobbles and counting rankings… ${end.toLocaleString()} of ${scrobbles.length.toLocaleString()}`);
+      await nextAnalysisFrame();
+      if (updateId !== analysisUpdateId) return;
+    }
+  }
+
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
-  renderList('tracks', countItems(filtered, 'tracks'));
-  renderList('albums', countItems(filtered, 'albums'));
-  renderList('artists', countItems(filtered, 'artists'));
-  updateInsights(filtered);
+  const rankings = finishRankingCounts(rankingCounts);
+  renderList('tracks', rankings.tracks);
+  renderList('albums', rankings.albums);
+  renderList('artists', rankings.artists);
+  setAnalysisLoading('Comparing this period with your listening history…');
+  await nextAnalysisFrame();
+  if (updateId !== analysisUpdateId) return;
+  const insightsUpdated = await updateInsights(categoryScoped, updateId);
+  if (!insightsUpdated || updateId !== analysisUpdateId) return;
   document.querySelectorAll('[data-range]').forEach(button => button.classList.toggle('active', button.dataset.range === activeRange.label));
+  finishAnalysisLoading(updateId);
 }
 
 document.getElementById('categoryFilter').addEventListener('change', event => { categoryFilter = event.target.value; updateAnalysis(); });
@@ -206,9 +269,16 @@ function buildShortcuts() {
     activeRange = { start: new Date(0), end: new Date(), label: 'All time' }; updateAnalysis();
   });
 
-  const dates = scrobbles.map(scrobbleDate).filter(Boolean).sort((a, b) => b - a);
-  const months = [...new Set(dates.map(date => keyForDate(date, 'month')))].slice(0, 12);
-  const years = [...new Set(dates.map(date => keyForDate(date, 'year')))].slice(0, 10);
+  const monthSet = new Set();
+  const yearSet = new Set();
+  for (const track of scrobbles) {
+    const date = scrobbleDate(track);
+    if (!date || !Number.isFinite(date.getTime())) continue;
+    monthSet.add(keyForDate(date, 'month'));
+    yearSet.add(keyForDate(date, 'year'));
+  }
+  const months = [...monthSet].sort((a, b) => b.localeCompare(a)).slice(0, 12);
+  const years = [...yearSet].sort((a, b) => Number(b) - Number(a)).slice(0, 10);
   const monthWrap = document.getElementById('monthLinks');
   if (months.length) {
     const heading = document.createElement('strong'); heading.textContent = 'Months'; monthWrap.append(heading);
@@ -267,13 +337,14 @@ async function loadScrobbles() {
     scrobbles = data.scrobbles;
     try { sessionStorage.setItem(`lastfm_scrobbles_${username.toLowerCase()}`, JSON.stringify(scrobbles)); } catch {}
   }
-  if (loadingMessage) loadingMessage.textContent = 'Preparing rankings and time period shortcuts…';
+  if (loadingMessage) loadingMessage.textContent = 'Loading saved categories and MusicBrainz classifications…';
   try { await ScrobbleCategories.load(username); }
   catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
   ScrobbleCategories.prepare(scrobbles);
+  if (loadingMessage) loadingMessage.textContent = 'Preparing time range shortcuts…';
   await new Promise(resolve => requestAnimationFrame(resolve));
-  buildShortcuts(); updateAnalysis();
-  if (loading) loading.style.display = 'none';
+  buildShortcuts();
+  await updateAnalysis();
 }
 
 loadScrobbles().catch(error => {

@@ -957,11 +957,10 @@ export async function getMusicBrainzStatus(username) {
 // Return cached MusicBrainz classifications for local scrobbles; this never makes network requests.
 export async function getMusicBrainzClassifications(username) {
   const key = username.toLowerCase().trim();
-  const [mbData, scrobbles] = await Promise.all([loadMbData(key), loadUserScrobbles(key)]);
-  const songs = extractUniqueSongsFromScrobbles(scrobbles);
-  return Object.fromEntries(songs.flatMap((song) => {
-    const classification = mbData.songs?.[song.songKey]?.musicbrainzCategory;
-    return ['music', 'audiobook'].includes(classification) ? [[song.songKey, classification]] : [];
+  const mbData = await loadMbData(key);
+  return Object.fromEntries(Object.entries(mbData.songs || {}).flatMap(([songKey, song]) => {
+    const classification = song?.musicbrainzCategory;
+    return ['music', 'audiobook'].includes(classification) ? [[songKey, classification]] : [];
   }));
 }
 

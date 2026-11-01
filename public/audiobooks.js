@@ -44,7 +44,11 @@
     return 'music';
   };
   const musicBrainzCategory = (_username, track) => musicBrainzClassifications[musicBrainzKey(track)] || 'unknown';
-  const category = (username, track) => overrides[entityKey('track', text(track.artist), track.name)] || overrides[identity(track)] || overrides[entityKey('album', text(track.artist), text(track.album))] || overrides[entityKey('artist', '', text(track.artist))] || (musicBrainzCategory(username, track) !== 'unknown' ? musicBrainzCategory(username, track) : guess(track));
+  const automaticCategory = track => {
+    const fromMusicBrainz = musicBrainzCategory('', track);
+    return fromMusicBrainz !== 'unknown' ? fromMusicBrainz : guess(track);
+  };
+  const category = (username, track) => overrides[entityKey('track', text(track.artist), track.name)] || overrides[identity(track)] || overrides[entityKey('album', text(track.artist), text(track.album))] || overrides[entityKey('artist', '', text(track.artist))] || automaticCategory(track);
   const includesCategory = (value, filter) => value === filter || value === 'both';
   const entityOverride = (type, artist, name) => overrides[entityKey(type, artist, name)] || null;
   const entityCategory = (type, artist, name, scrobbles) => {
@@ -55,7 +59,18 @@
       : type === 'album'
         ? normalized(text(track.artist)) === normalized(artist) && normalized(text(track.album)) === normalized(name)
         : normalized(text(track.artist)) === normalized(artist) && normalized(track.name) === normalized(name));
-    const categories = new Set(selected.map(track => category('', track)));
+    return combinedCategory(selected.map(track => category('', track)));
+  };
+  const automaticEntityCategory = (type, artist, name, scrobbles) => {
+    const selected = scrobbles.filter(track => type === 'artist'
+      ? normalized(text(track.artist)) === normalized(name)
+      : type === 'album'
+        ? normalized(text(track.artist)) === normalized(artist) && normalized(text(track.album)) === normalized(name)
+        : normalized(text(track.artist)) === normalized(artist) && normalized(track.name) === normalized(name));
+    return combinedCategory(selected.map(automaticCategory));
+  };
+  const combinedCategory = values => {
+    const categories = new Set(values);
     if (categories.has('both') || (categories.has('music') && categories.has('audiobook'))) return 'both';
     return categories.values().next().value || 'music';
   };
@@ -68,5 +83,5 @@
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');
     overrides = data.categories || {};
   };
-  window.ScrobbleCategories = { load, prepare, category, musicBrainzCategory, includesCategory, entityCategory, entityOverride, setCategory, guess };
+  window.ScrobbleCategories = { load, prepare, category, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, setCategory, guess };
 })();

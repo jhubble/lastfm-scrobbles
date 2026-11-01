@@ -4,6 +4,18 @@ const type = query.get('type') || '';
 const name = query.get('name') || '';
 const artist = query.get('artist') || '';
 const categoryFilter = query.get('category') || 'all';
+const yieldToBrowser = () => new Promise(resolve => requestAnimationFrame(resolve));
+function updateLoadingStep(step, message) {
+  document.querySelectorAll('[data-loading-step]').forEach(item => {
+    const itemStep = Number(item.dataset.loadingStep);
+    const complete = itemStep < step;
+    const active = itemStep === step;
+    item.classList.toggle('is-complete', complete);
+    item.classList.toggle('is-active', active);
+    item.querySelector('.loading-step-icon').textContent = complete ? '✓' : active ? '●' : '○';
+  });
+  document.getElementById('loadingMessage').textContent = message;
+}
 const norm = value => String(value || '').trim().toLocaleLowerCase();
 const textOf = (value, fallback = '') => {
   if (typeof value === 'string') return value.trim() || fallback;
@@ -73,8 +85,10 @@ function renderTrackScrobbleHistory(scrobbles) {
 
   const plays = scrobbles
     .filter(matches)
-    .map(track => ({ track, date: dateOf(track) }))
-    .sort((a, b) => (b.date?.getTime() ?? -Infinity) - (a.date?.getTime() ?? -Infinity));
+    .map((track, index) => {
+      const date = dateOf(track);
+      return { track, date: date && Number.isFinite(date.getTime()) ? date : null, index };
+    });
   document.getElementById('trackScrobbleHistoryHeading').textContent = `All scrobbles for this track (${plays.length.toLocaleString()})`;
 
   if (!plays.length) {
@@ -90,23 +104,74 @@ function renderTrackScrobbleHistory(scrobbles) {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const header = document.createElement('tr');
-  for (const label of ['Played at', 'Album']) {
+  const columns = [
+    { key: 'time', label: 'Played at' },
+    { key: 'title', label: 'Track' },
+    { key: 'artist', label: 'Artist' },
+    { key: 'album', label: 'Album' },
+  ];
+  const sortState = { key: 'time', direction: 'asc' };
+  const body = document.createElement('tbody');
+  const renderRows = () => {
+    const sorted = [...plays].sort((a, b) => {
+      let comparison;
+      if (sortState.key === 'time') {
+        const aTime = a.date?.getTime();
+        const bTime = b.date?.getTime();
+        if (aTime == null || bTime == null) {
+          if (aTime == null && bTime == null) return a.index - b.index;
+          return aTime == null ? 1 : -1;
+        }
+        comparison = aTime - bTime;
+      } else {
+        const aValue = sortState.key === 'title' ? titleOf(a.track) : sortState.key === 'artist' ? artistOf(a.track) : albumOf(a.track);
+        const bValue = sortState.key === 'title' ? titleOf(b.track) : sortState.key === 'artist' ? artistOf(b.track) : albumOf(b.track);
+        comparison = aValue.localeCompare(bValue, undefined, { sensitivity: 'base' });
+      }
+      if (comparison === 0) return a.index - b.index;
+      return sortState.direction === 'asc' ? comparison : -comparison;
+    });
+    body.replaceChildren();
+    for (const { track, date } of sorted) {
+      const row = document.createElement('tr');
+      const cells = [
+        date ? date.toLocaleString() : 'Date unavailable',
+        titleOf(track),
+        artistOf(track),
+        albumOf(track) || '—',
+      ];
+      for (const value of cells) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.append(cell);
+      }
+      body.append(row);
+    }
+  };
+  columns.forEach(column => {
     const th = document.createElement('th');
-    th.textContent = label;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'sort-button';
+    button.addEventListener('click', () => {
+      sortState.direction = sortState.key === column.key && sortState.direction === 'asc' ? 'desc' : 'asc';
+      sortState.key = column.key;
+      columns.forEach((entry, index) => {
+        const head = header.children[index];
+        const active = entry.key === sortState.key;
+        head.setAttribute('aria-sort', active ? (sortState.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+        head.firstChild.textContent = `${entry.label}${active ? sortState.direction === 'asc' ? ' ↑' : ' ↓' : ''}`;
+      });
+      renderRows();
+    });
+    button.textContent = `${column.label}${column.key === sortState.key ? ' ↑' : ''}`;
+    th.append(button);
+    th.setAttribute('aria-sort', column.key === sortState.key ? 'ascending' : 'none');
     header.append(th);
-  }
+  });
   thead.append(header);
-  const tbody = document.createElement('tbody');
-  for (const { track, date } of plays) {
-    const row = document.createElement('tr');
-    const dateCell = document.createElement('td');
-    dateCell.textContent = date && Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Date unavailable';
-    const albumCell = document.createElement('td');
-    albumCell.textContent = albumOf(track) || '—';
-    row.append(dateCell, albumCell);
-    tbody.append(row);
-  }
-  table.append(thead, tbody);
+  table.append(thead, body);
+  renderRows();
   wrap.append(table);
   content.append(wrap);
 }
@@ -251,9 +316,12 @@ function render(scrobbles) {
   const categoryControl = document.getElementById('entityCategory');
   categoryControl.replaceChildren();
   const currentCategory = ScrobbleCategories.entityCategory(type, entity.artist, name, scrobbles);
+  const automaticCategory = ScrobbleCategories.automaticEntityCategory(type, entity.artist, name, scrobbles);
   const explicitCategory = ScrobbleCategories.entityOverride(type, entity.artist, name);
+  const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
   for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
-    const option = document.createElement('option'); option.value = value; option.textContent = label;
+    const option = document.createElement('option'); option.value = value;
+    option.textContent = value === 'auto' ? `Automatic · ${automaticLabel}` : label;
     option.selected = value === 'auto' ? !explicitCategory : currentCategory === value;
     categoryControl.append(option);
   }
@@ -317,8 +385,6 @@ function render(scrobbles) {
     );
   }
   renderTrackScrobbleHistory(scrobbles);
-  document.getElementById('content').hidden = false;
-  document.getElementById('loading').hidden = true;
 }
 
 async function loadMusicBrainzEntityDetails() {
@@ -390,9 +456,14 @@ async function loadMusicBrainzEntityDetails() {
 }
 
 async function load() {
+  updateLoadingStep(1, 'Checking this listening detail…');
+  await yieldToBrowser();
   if (!username || !['artist', 'album', 'track'].includes(type) || !name) throw new Error('This detail link is incomplete. Open the item again from Listening Analysis.');
   const back = document.getElementById('backLink');
   back.href = `analysis.html?username=${encodeURIComponent(username)}`;
+
+  updateLoadingStep(2, 'Loading saved scrobbles…');
+  await yieldToBrowser();
   let scrobbles = [];
   try { scrobbles = JSON.parse(sessionStorage.getItem(`lastfm_scrobbles_${username.toLowerCase()}`) || '[]'); } catch {}
   if (!scrobbles.length) {
@@ -402,15 +473,34 @@ async function load() {
     if (!Array.isArray(data.scrobbles)) throw new Error('No local scrobble data found for this user.');
     scrobbles = data.scrobbles;
   }
+
+  updateLoadingStep(3, 'Loading saved categories and MusicBrainz classifications…');
+  await yieldToBrowser();
   try { await ScrobbleCategories.load(username); }
   catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
+
+  updateLoadingStep(4, `Building listening history from ${scrobbles.length.toLocaleString()} scrobbles…`);
+  await yieldToBrowser();
   ScrobbleCategories.prepare(scrobbles);
   render(scrobbles);
-  loadMusicBrainzEntityDetails();
+
+  updateLoadingStep(5, 'Loading cached MusicBrainz details…');
+  await yieldToBrowser();
+  await loadMusicBrainzEntityDetails();
+  document.querySelectorAll('[data-loading-step]').forEach(item => {
+    item.classList.remove('is-active');
+    item.classList.add('is-complete');
+    item.querySelector('.loading-step-icon').textContent = '✓';
+  });
+  document.getElementById('loading').setAttribute('aria-busy', 'false');
+  document.getElementById('content').hidden = false;
+  document.getElementById('loading').hidden = true;
 }
 
 load().catch(error => {
   const loading = document.getElementById('loading');
-  loading.textContent = error.message;
-  loading.classList.add('muted');
+  loading.dataset.state = 'error';
+  loading.setAttribute('aria-busy', 'false');
+  document.getElementById('loadingSpinner').hidden = true;
+  document.getElementById('loadingMessage').textContent = error.message;
 });
