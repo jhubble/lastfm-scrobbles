@@ -206,12 +206,15 @@ function renderList(id, entries) {
     const automaticCategory = ScrobbleCategories.automaticEntityCategory(entityType, entity.artist, entity.name, scrobbles);
     const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
     const explicitCategory = ScrobbleCategories.entityOverride(entityType, entity.artist, entity.name);
+    const inheritedCategory = entityType === 'artist' ? null : ScrobbleCategories.inheritedArtistCategory(entity.artist);
     for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
       const option = document.createElement('option'); option.value = value;
       option.textContent = value === 'auto' ? `Automatic · ${automaticLabel}` : label;
-      option.selected = value === 'auto' ? !explicitCategory : selectedCategory === value;
+      option.selected = inheritedCategory ? value === inheritedCategory : value === 'auto' ? !explicitCategory : selectedCategory === value;
       control.append(option);
     }
+    control.disabled = Boolean(inheritedCategory);
+    if (inheritedCategory) control.title = `Inherited from artist classification: ${inheritedCategory}`;
     control.addEventListener('change', async () => {
       const previousSelection = explicitCategory || 'auto';
       control.disabled = true;

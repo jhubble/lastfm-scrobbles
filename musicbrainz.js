@@ -306,6 +306,7 @@ function combineCategories(categories) {
 function getMusicBrainzLookupCategories(scrobbles, uniqueSongs, manualOverrides, mbSongs) {
   const songCategories = new Map();
   const directTrackCategories = new Map();
+  const forcedArtistCategories = new Map();
   const albumDates = new Map();
 
   for (const track of scrobbles) {
@@ -315,9 +316,12 @@ function getMusicBrainzLookupCategories(scrobbles, uniqueSongs, manualOverrides,
     const album = normalizeAlbumTitle(track.album);
     const songKey = makeSongKey(artist, title);
     const directTrackCategory = manualOverrides[categoryOverrideKey('track', artist, title)] || manualOverrides[`${lookupCategoryText(artist)}\u0000${lookupCategoryText(title)}`];
+    const artistCategory = manualOverrides[categoryOverrideKey('artist', '', artist)];
+    if (artistCategory === 'music' || artistCategory === 'audiobook') forcedArtistCategories.set(songKey, artistCategory);
     if (directTrackCategory) directTrackCategories.set(songKey, directTrackCategory);
     else {
-      const inheritedCategory = (album && manualOverrides[categoryOverrideKey('album', artist, album)]) || manualOverrides[categoryOverrideKey('artist', '', artist)];
+      const albumCategory = album && manualOverrides[categoryOverrideKey('album', artist, album)];
+      const inheritedCategory = albumCategory || (artistCategory === 'music' || artistCategory === 'audiobook' ? artistCategory : null);
       if (inheritedCategory) {
         const categories = songCategories.get(songKey) || new Set();
         categories.add(inheritedCategory);
@@ -371,9 +375,9 @@ function getMusicBrainzLookupCategories(scrobbles, uniqueSongs, manualOverrides,
 
   const result = new Map();
   for (const song of uniqueSongs) {
-    const manualCategory = directTrackCategories.has(song.songKey)
+    const manualCategory = forcedArtistCategories.get(song.songKey) || (directTrackCategories.has(song.songKey)
       ? directTrackCategories.get(song.songKey)
-      : combineCategories(songCategories.get(song.songKey) || new Set());
+      : combineCategories(songCategories.get(song.songKey) || new Set()));
     const automaticCategory = combineCategories(autoCategories.get(song.songKey) || new Set());
     result.set(song.songKey, { manualCategory, automaticCategory });
   }

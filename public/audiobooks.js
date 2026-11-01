@@ -60,11 +60,19 @@
     const fromMusicBrainz = musicBrainzCategory('', track);
     return fromMusicBrainz !== 'unknown' ? fromMusicBrainz : guess(track);
   };
-  const category = (username, track) => overrides[entityKey('track', text(track.artist), track.name)] || overrides[identity(track)] || overrides[entityKey('album', text(track.artist), text(track.album))] || overrides[entityKey('artist', '', text(track.artist))] || automaticCategory(track);
+  const category = (username, track) => {
+    const artistCategory = overrides[entityKey('artist', '', text(track.artist))];
+    if (artistCategory === 'music' || artistCategory === 'audiobook') return artistCategory;
+    return overrides[entityKey('track', text(track.artist), track.name)] || overrides[identity(track)] || overrides[entityKey('album', text(track.artist), text(track.album))] || automaticCategory(track);
+  };
   const includesCategory = (value, filter) => value === filter || value === 'both';
   const entityOverride = (type, artist, name) => overrides[entityKey(type, artist, name)] || null;
   const entityCategory = (type, artist, name, scrobbles) => {
     const explicit = entityOverride(type, artist, name);
+    if (type !== 'artist') {
+      const artistCategory = entityOverride('artist', '', artist);
+      if (artistCategory === 'music' || artistCategory === 'audiobook') return artistCategory;
+    }
     if (explicit) return explicit;
     const selected = scrobbles.filter(track => type === 'artist'
       ? normalized(text(track.artist)) === normalized(name)
@@ -72,6 +80,10 @@
         ? normalized(text(track.artist)) === normalized(artist) && normalized(text(track.album)) === normalized(name)
         : normalized(text(track.artist)) === normalized(artist) && normalized(track.name) === normalized(name));
     return combinedCategory(selected.map(track => category('', track)));
+  };
+  const inheritedArtistCategory = artist => {
+    const value = entityOverride('artist', '', artist);
+    return value === 'music' || value === 'audiobook' ? value : null;
   };
   const automaticEntityCategory = (type, artist, name, scrobbles) => {
     const selected = scrobbles.filter(track => type === 'artist'
@@ -99,5 +111,5 @@
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');
     overrides = data.categories || {};
   };
-  window.ScrobbleCategories = { load, prepare, category, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, setCategory, guess };
+  window.ScrobbleCategories = { load, prepare, category, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, inheritedArtistCategory, setCategory, guess };
 })();

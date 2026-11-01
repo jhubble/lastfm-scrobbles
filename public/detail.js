@@ -203,7 +203,7 @@ function attachRelated(records, sourceTracks, groupingKey, relatedKind) {
   return records.map(record => ({ ...record, related: relatedEntities(grouped.get(record.key) || [], relatedKind) }));
 }
 
-function buildRelatedTable(title, records, kind, emptyText, itemHeading, relatedHeading, categoryScrobbles = null) {
+function buildRelatedTable(title, records, kind, emptyText, itemHeading, relatedHeading, categoryScrobbles = null, allScrobbles = categoryScrobbles) {
   const section = document.createElement('section'); section.className = 'card related';
   const heading = document.createElement('h2'); heading.textContent = title; section.append(heading);
   if (!records.length) {
@@ -241,20 +241,25 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
         const automaticCategory = ScrobbleCategories.automaticEntityCategory('album', entity.artist, entity.name, categoryScrobbles);
         const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
         const explicitCategory = ScrobbleCategories.entityOverride('album', entity.artist, entity.name);
+        const inheritedCategory = ScrobbleCategories.inheritedArtistCategory(entity.artist);
         for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
           const option = document.createElement('option'); option.value = value;
           option.textContent = value === 'auto' ? `Automatic · ${automaticLabel}` : label;
-          option.selected = value === 'auto' ? !explicitCategory : currentCategory === value;
+          option.selected = inheritedCategory ? value === inheritedCategory : value === 'auto' ? !explicitCategory : currentCategory === value;
           control.append(option);
         }
+        control.disabled = Boolean(inheritedCategory);
+        if (inheritedCategory) control.title = `Inherited from artist classification: ${inheritedCategory}`;
         control.addEventListener('change', async () => {
+          const previousSelection = explicitCategory || 'auto';
           control.disabled = true;
           try {
-            await ScrobbleCategories.setCategory(username, entity, control.value, categoryScrobbles);
-            render(scrobbles);
+            await ScrobbleCategories.setCategory(username, entity, control.value, allScrobbles);
+            control.disabled = false;
           } catch (error) {
             alert(error.message);
-            render(scrobbles);
+            control.value = previousSelection;
+            control.disabled = false;
           }
         });
         categoryCell.append(control);
@@ -348,13 +353,16 @@ function render(scrobbles) {
   const currentCategory = ScrobbleCategories.entityCategory(type, entity.artist, name, scrobbles);
   const automaticCategory = ScrobbleCategories.automaticEntityCategory(type, entity.artist, name, scrobbles);
   const explicitCategory = ScrobbleCategories.entityOverride(type, entity.artist, name);
+  const inheritedCategory = type === 'artist' ? null : ScrobbleCategories.inheritedArtistCategory(entity.artist);
   const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
   for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
     const option = document.createElement('option'); option.value = value;
     option.textContent = value === 'auto' ? `Automatic · ${automaticLabel}` : label;
-    option.selected = value === 'auto' ? !explicitCategory : currentCategory === value;
+    option.selected = inheritedCategory ? value === inheritedCategory : value === 'auto' ? !explicitCategory : currentCategory === value;
     categoryControl.append(option);
   }
+  categoryControl.disabled = Boolean(inheritedCategory);
+  if (inheritedCategory) categoryControl.title = `Inherited from artist classification: ${inheritedCategory}`;
   categoryControl.onchange = async () => {
     categoryControl.disabled = true;
     try {
@@ -383,7 +391,7 @@ function render(scrobbles) {
     const tracks = attachRelated(aggregate(selected, track => norm(titleOf(track)), titleOf), selected, track => norm(titleOf(track)), 'album')
       .map(record => ({ ...record, linkName: record.label, artist: name }));
     related.append(
-      buildRelatedTable('Albums by this artist', albums, 'album', 'No album tags found.', 'Album', 'Artist', selected),
+      buildRelatedTable('Albums by this artist', albums, 'album', 'No album tags found.', 'Album', 'Artist', selected, scrobbles),
       buildRelatedTable('Tracks by this artist', tracks, 'track', 'No tracks found.', 'Track', 'Album'),
     );
   } else if (type === 'album') {
