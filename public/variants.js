@@ -1,5 +1,5 @@
 (() => {
-  let saved = { version: 1, groups: { artists: [], albums: [], tracks: [] } };
+  let saved = { version: 1, groups: { artists: [], albums: [], tracks: [] }, decisions: { artists: [], albums: [], tracks: [] } };
   let indexes = { artists: new Map(), albums: new Map(), tracks: new Map() };
   const rawKey = value => String(value || '').normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
   const text = value => typeof value === 'string' ? value : value?.['#text'] || value?.name || '';
@@ -48,13 +48,17 @@
     if (!response.ok) throw new Error(data.error || 'Could not load saved variants.');
     saved = data.variants || saved;
     saved.groups ||= { artists: [], albums: [], tracks: [] };
+    saved.decisions ||= { artists: [], albums: [], tracks: [] };
     rebuildIndexes();
     return saved;
   };
-  const save = async (username, groups) => {
+  const save = async (username, groups, decisions) => {
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/variants`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groups: { artists: groups.artists || [], albums: groups.albums || [], tracks: groups.tracks || [] } }),
+      body: JSON.stringify({
+        groups: { artists: groups.artists || [], albums: groups.albums || [], tracks: groups.tracks || [] },
+        decisions: { artists: decisions.artists || [], albums: decisions.albums || [], tracks: decisions.tracks || [] },
+      }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save variants.');
@@ -85,8 +89,14 @@
       .filter(group => group.counts.size > 1)
       .map(group => {
         const variants = [...group.counts.keys()].sort((a, b) => a.localeCompare(b));
-        const existing = (saved.groups[type] || []).find(item => item.variants?.some(value => variants.includes(value)));
-        return { artist: group.artist, variants, canonical: variants.includes(existing?.canonical) ? existing.canonical : [...group.counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0], saved: Boolean(existing), counts: Object.fromEntries(group.counts) };
+        const matches = item => item.variants?.some(value => variants.includes(value))
+          && (type === 'artists' || clean(item.artist) === clean(group.artist));
+        const existing = (saved.groups[type] || []).find(matches);
+        const decision = (saved.decisions[type] || []).find(matches);
+        const canonical = variants.includes(existing?.canonical) ? existing.canonical
+          : [...group.counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+        const plays = [...group.counts.values()].reduce((total, count) => total + count, 0);
+        return { artist: group.artist, variants, canonical, saved: Boolean(existing), status: existing ? 'merged' : decision?.status || 'unselected', counts: Object.fromEntries(group.counts), plays };
       })]));
   };
   rebuildIndexes();

@@ -10,9 +10,20 @@
     h1 { color: #e5151f; } h2 { margin-top: 28px; } a { color: #ff6870; }
     .muted { color: #a8a8b3; } .status { margin: 14px 0; }
     .variant-card { background: #202024; border: 1px solid #393940; border-radius: 8px; padding: 16px; margin: 12px 0; }
-    .variant-card h3 { margin: 0 0 12px; } .variant-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid #323238; }
+    .variant-card h3 { margin: 0 0 12px; } .variant-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid #323238; }
+    .section-nav { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 18px 0; padding: 12px 14px; background: #202024; border-radius: 7px; }
+    .section-nav a { white-space: nowrap; }
+    .variant-choice { grid-template-columns: minmax(0, 1fr) auto auto; }
     .variant-choice label { display: flex; gap: 9px; align-items: center; overflow-wrap: anywhere; cursor: pointer; }
+    .scrobble-results { grid-column: 1 / -1; width: 100%; max-height: 45vh; overflow: auto; border-top: 1px solid #323238; margin-top: 8px; }
+    .scrobble-results table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .scrobble-results th, .scrobble-results td { padding: 7px 8px; border-bottom: 1px solid #323238; text-align: left; vertical-align: top; }
+    .scrobble-results th { position: sticky; top: 0; background: #202024; color: #a8a8b3; }
+    .scrobble-results td:first-child { white-space: nowrap; }
+    .scrobble-results .more { margin: 10px 0; }
     button { background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 12px; cursor: pointer; }
+    .variant-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .variant-actions button:disabled { opacity: .55; cursor: default; }
     .empty { color: #a8a8b3; padding: 12px 0; }
     @media(max-width:600px) { body { padding: 14px; } .variant-choice { grid-template-columns: minmax(0,1fr) auto; } .variant-choice .count { grid-column: 1 / -1; } }
   </style>
@@ -20,7 +31,10 @@
 <body><main>
   <a id="analysisLink">← Back to listening analysis</a>
   <h1>Similarity detection</h1>
-  <p class="muted">Review spelling, punctuation, Unicode, and edition-name variations found in this library. Choose the spelling to use in reports. Matches are grouped conservatively by normalized text; review before saving.</p>
+  <p class="muted">Review spelling, punctuation, Unicode, and edition-name variations found in this library. Choose a canonical name to merge them, mark a group intentionally unselected, or keep the names separate. Sections are ordered by total plays affected.</p>
+  <nav class="section-nav" aria-label="Similarity decision sections">
+    <a href="#merged">Selected duplicates</a><a href="#unselected">Unselected</a><a href="#ignore">Intentionally unselected</a><a href="#separate">Keep different</a>
+  </nav>
   <div id="status" class="status">Loading scrobbles and saved variants…</div>
   <div id="groups"></div>
 </main>

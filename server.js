@@ -216,10 +216,10 @@ async function loadVariants(username) {
   try {
     const parsed = JSON.parse(await fs.readFile(getVariantFilePath(username), 'utf8'));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? { version: 1, groups: { artists: [], albums: [], tracks: [], ...(parsed.groups || {}) } }
-      : { version: 1, groups: { artists: [], albums: [], tracks: [] } };
+      ? { version: 1, groups: { artists: [], albums: [], tracks: [], ...(parsed.groups || {}) }, decisions: { artists: [], albums: [], tracks: [], ...(parsed.decisions || {}) } }
+      : { version: 1, groups: { artists: [], albums: [], tracks: [] }, decisions: { artists: [], albums: [], tracks: [] } };
   } catch (err) {
-    if (err.code === 'ENOENT') return { version: 1, groups: { artists: [], albums: [], tracks: [] } };
+    if (err.code === 'ENOENT') return { version: 1, groups: { artists: [], albums: [], tracks: [] }, decisions: { artists: [], albums: [], tracks: [] } };
     throw err;
   }
 }
@@ -911,8 +911,12 @@ app.put('/api/scrobbles/:username/variants', async (req, res) => {
   if (!groups || typeof groups !== 'object' || !['artists', 'albums', 'tracks'].every(key => Array.isArray(groups[key]))) {
     return res.status(400).json({ error: 'Artist, album, and track variant groups are required.' });
   }
+  const decisions = req.body?.decisions || { artists: [], albums: [], tracks: [] };
+  if (!decisions || typeof decisions !== 'object' || !['artists', 'albums', 'tracks'].every(key => Array.isArray(decisions[key]))) {
+    return res.status(400).json({ error: 'Artist, album, and track variant decisions are required.' });
+  }
   try {
-    const variants = { version: 1, groups };
+    const variants = { version: 1, groups, decisions };
     await saveVariants(req.params.username, variants);
     return res.json({ username: req.params.username.trim(), variants });
   } catch (err) {
