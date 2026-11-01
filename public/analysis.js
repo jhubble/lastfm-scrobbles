@@ -268,7 +268,9 @@ async function updateAnalysis() {
             ? isAudiobook
             : categoryFilter === 'automatic_audiobook'
               ? isAudiobook && classification.source === 'automatic'
-              : isAudiobook && classification.source === 'manual';
+              : categoryFilter === 'all_automatic'
+                ? classification.source === 'automatic' && (ScrobbleCategories.includesCategory(classification.category, 'music') || isAudiobook)
+                : isAudiobook && classification.source === 'manual';
         if (!matches) continue;
       }
       categoryScoped.push(track);
