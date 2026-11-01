@@ -466,6 +466,27 @@ async function fetchRecordingDetails(recordingId, scrobbledAlbum, title, abortSi
   } : null;
 }
 
+function chooseBestRecording(recordings, artist, title) {
+  const expectedArtist = normalizeText(artist);
+  const expectedTitle = normalizeText(title);
+  let candidates = recordings || [];
+
+  const exactTitles = candidates.filter((recording) => normalizeText(recording.title) === expectedTitle);
+  if (exactTitles.length) candidates = exactTitles;
+
+  const exactArtists = candidates.filter((recording) => {
+    const credits = (recording['artist-credit'] || []).map((credit) => normalizeText(credit.name || credit.artist?.name));
+    return credits.includes(expectedArtist);
+  });
+  if (exactArtists.length) candidates = exactArtists;
+
+  return [...candidates].sort((a, b) => {
+    const dateA = a['first-release-date'] || '9999';
+    const dateB = b['first-release-date'] || '9999';
+    return dateA.localeCompare(dateB) || Number(b.score || 0) - Number(a.score || 0);
+  })[0] || null;
+}
+
 // Query MusicBrainz for a recording
 export async function lookupSongInMusicBrainz(song, abortSignal) {
   const { artist, title, firstScrobbledAlbum, trackMbid } = song;
@@ -491,7 +512,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   const escapedArtist = escapeLucene(artist);
   const escapedTitle = escapeLucene(title);
 
-  let searchUrl = `${MUSICBRAINZ_BASE_URL}recording?query=recording:"${escapedTitle}"%20AND%20artist:"${escapedArtist}"&fmt=json&limit=5`;
+  let searchUrl = `${MUSICBRAINZ_BASE_URL}recording?query=recording:"${escapedTitle}"%20AND%20artist:"${escapedArtist}"&fmt=json&limit=25`;
   let result = null;
 
   try {
@@ -507,7 +528,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
     if (cleaned && cleaned.toLowerCase() !== title.toLowerCase()) {
       logger.debug('MusicBrainz', `Retrying with cleaned title: "${cleaned}"`);
       const escapedCleaned = escapeLucene(cleaned);
-      const fallbackUrl = `${MUSICBRAINZ_BASE_URL}recording?query=recording:"${escapedCleaned}"%20AND%20artist:"${escapedArtist}"&fmt=json&limit=5`;
+      const fallbackUrl = `${MUSICBRAINZ_BASE_URL}recording?query=recording:"${escapedCleaned}"%20AND%20artist:"${escapedArtist}"&fmt=json&limit=25`;
       try {
         result = await rateLimitedFetch(fallbackUrl, abortSignal);
       } catch (err) {
@@ -519,7 +540,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   // 4. Fallback: unquoted search if still no result
   if (!result || !result.recordings || result.recordings.length === 0) {
     const cleaned = cleanTrackTitle(title);
-    const unquotedUrl = `${MUSICBRAINZ_BASE_URL}recording?query=recording:${escapeLucene(cleaned)}%20AND%20artist:${escapeLucene(artist)}&fmt=json&limit=5`;
+    const unquotedUrl = `${MUSICBRAINZ_BASE_URL}recording?query=recording:${escapeLucene(cleaned)}%20AND%20artist:${escapeLucene(artist)}&fmt=json&limit=25`;
     try {
       result = await rateLimitedFetch(unquotedUrl, abortSignal);
     } catch (err) {
@@ -528,8 +549,8 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   }
 
   if (result && result.recordings && result.recordings.length > 0) {
-    // Pick the best match (recordings are sorted by Lucene relevance score descending)
-    const bestMatch = result.recordings[0];
+    // Prefer exact title/artist candidates, then the earliest known recording date.
+    const bestMatch = chooseBestRecording(result.recordings, artist, title);
     const details = await fetchRecordingDetails(bestMatch.id, firstScrobbledAlbum, title, abortSignal, bestMatch);
     return {
       status: 'found',
