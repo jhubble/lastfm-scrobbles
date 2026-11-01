@@ -7,6 +7,8 @@
   let musicBrainzClassifications = {};
   let burstAlbums = new Set();
   let trackPlayCounts = new Map();
+  let preparedEntityCategories = new Map();
+  let preparedAutomaticEntityCategories = new Map();
   // Require some repeat evidence before using ambiguous title/album/listening-pattern clues.
   const MIN_HEURISTIC_TRACK_PLAYS = 5;
   const load = async (username, options = {}) => {
@@ -49,6 +51,34 @@
       for (const date of dates) { earliest = Math.min(earliest, date); latest = Math.max(latest, date); }
       return latest - earliest <= 30 * 86400;
     }).map(([key]) => key));
+
+    // Cache category aggregates by normalized entity identity. Analysis renders up
+    // to 500 rows per list; scanning the complete history for each row made that
+    // render quadratic in the number of scrobbles.
+    preparedEntityCategories = new Map();
+    preparedAutomaticEntityCategories = new Map();
+    const addCategory = (cache, type, artist, name, value) => {
+      const key = entityKey(type, artist, name);
+      const values = cache.get(key) || new Set();
+      values.add(value);
+      cache.set(key, values);
+    };
+    for (const track of scrobbles) {
+      const rawArtist = text(track.artist);
+      const artist = window.ScrobbleVariants?.resolveArtist(rawArtist) || rawArtist;
+      const title = window.ScrobbleVariants?.resolveTrack(rawArtist, track.name) || track.name;
+      const album = window.ScrobbleVariants?.resolveAlbum(rawArtist, text(track.album)) || text(track.album);
+      const selectedCategory = category('', track);
+      const automatic = automaticCategory(track);
+      addCategory(preparedEntityCategories, 'artist', '', artist, selectedCategory);
+      addCategory(preparedAutomaticEntityCategories, 'artist', '', artist, automatic);
+      addCategory(preparedEntityCategories, 'track', artist, title, selectedCategory);
+      addCategory(preparedAutomaticEntityCategories, 'track', artist, title, automatic);
+      if (album) {
+        addCategory(preparedEntityCategories, 'album', artist, album, selectedCategory);
+        addCategory(preparedAutomaticEntityCategories, 'album', artist, album, automatic);
+      }
+    }
   };
   const guess = track => {
     const title = normalized(track.name);
@@ -98,6 +128,8 @@
       if (artistCategory === 'music' || artistCategory === 'audiobook') return artistCategory;
     }
     if (explicit) return explicit;
+    const prepared = preparedEntityCategories.get(entityKey(type, artist, name));
+    if (prepared) return combinedCategory(prepared);
     const variants = window.ScrobbleVariants;
     const selected = scrobbles.filter(track => type === 'artist'
       ? normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(name)
@@ -111,6 +143,8 @@
     return value === 'music' || value === 'audiobook' ? value : null;
   };
   const automaticEntityCategory = (type, artist, name, scrobbles) => {
+    const prepared = preparedAutomaticEntityCategories.get(entityKey(type, artist, name));
+    if (prepared) return combinedCategory(prepared);
     const variants = window.ScrobbleVariants;
     const selected = scrobbles.filter(track => type === 'artist'
       ? normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(name)
