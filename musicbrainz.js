@@ -1081,9 +1081,9 @@ export async function getMusicBrainzStatus(username) {
 export async function getMusicBrainzClassifications(username, artist = '') {
   const key = username.toLowerCase().trim();
   const mbData = await loadMbData(key);
-  const artistPrefix = artist ? `${normalizeText(artist)}:::` : '';
+  const artistPrefixes = (Array.isArray(artist) ? artist : artist ? [artist] : []).map(value => `${normalizeText(value)}:::`);
   return Object.fromEntries(Object.entries(mbData.songs || {}).flatMap(([songKey, song]) => {
-    if (artistPrefix && !songKey.startsWith(artistPrefix)) return [];
+    if (artistPrefixes.length && !artistPrefixes.some(prefix => songKey.startsWith(prefix))) return [];
     const classification = song?.musicbrainzCategory;
     return ['music', 'audiobook'].includes(classification) ? [[songKey, classification]] : [];
   }));
@@ -1093,25 +1093,30 @@ export async function getMusicBrainzClassifications(username, artist = '') {
 export async function getMusicBrainzEntityDetails(username, { type, name, artist = '' } = {}) {
   const key = username.toLowerCase().trim();
   const [mbData, scrobbles] = await Promise.all([loadMbData(key), loadUserScrobbles(key)]);
-  const targetName = normalizeText(name);
-  const targetArtist = normalizeText(artist);
   const currentSongs = new Map(extractUniqueSongsFromScrobbles(scrobbles).map((song) => [song.songKey, song]));
   const matchingSongKeys = new Set();
-
-  if (type === 'track') {
-    matchingSongKeys.add(makeSongKey(artist, name));
-  } else {
-    for (const track of scrobbles) {
-      const rawArtist = typeof track.artist === 'string' ? track.artist : track.artist?.['#text'] || track.artist?.name || '';
-      const trackArtist = normalizeText(rawArtist);
-      if (type === 'artist' && trackArtist === targetName) {
-        matchingSongKeys.add(makeSongKey(trackArtist, track.name));
-      } else if (type === 'album') {
-        const albumName = normalizeAlbumTitle(track.album);
-        if (trackArtist === targetArtist && normalizeText(albumName) === targetName) {
-          matchingSongKeys.add(makeSongKey(trackArtist, track.name));
-        }
-      }
+  let variantGroups = { artists: [], albums: [], tracks: [] };
+  try {
+    const localUserKey = String(username || '').trim().toLocaleLowerCase();
+    const savedVariants = JSON.parse(await fs.readFile(path.join(dataDir, `scrobble_variants_${encodeURIComponent(localUserKey)}.json`), 'utf8'));
+    variantGroups = { ...variantGroups, ...(savedVariants.groups || {}) };
+  } catch (err) { if (err.code !== 'ENOENT' && err.name !== 'SyntaxError') throw err; }
+  const groupValues = (groups, target, parent = '') => {
+    const group = groups.find(item => normalizeText(item.canonical) === normalizeText(target)
+      || (item.variants || []).some(value => normalizeText(value) === normalizeText(target)));
+    if (!group || (parent && normalizeText(group.artist) !== normalizeText(parent))) return new Set([target]);
+    return new Set([group.canonical, ...(group.variants || [])]);
+  };
+  const artistNames = type === 'artist' ? groupValues(variantGroups.artists, name) : groupValues(variantGroups.artists, artist);
+  const entityNames = type === 'album' ? groupValues(variantGroups.albums, name, artist)
+    : type === 'track' ? groupValues(variantGroups.tracks, name, artist) : new Set([name]);
+  for (const track of scrobbles) {
+    const rawArtist = typeof track.artist === 'string' ? track.artist : track.artist?.['#text'] || track.artist?.name || '';
+    const artistMatches = [...artistNames].some(value => normalizeText(value) === normalizeText(rawArtist));
+    const itemName = type === 'album' ? normalizeAlbumTitle(track.album) : track.name;
+    const itemMatches = [...entityNames].some(value => normalizeText(value) === normalizeText(itemName));
+    if ((type === 'artist' && artistMatches) || (type !== 'artist' && artistMatches && itemMatches)) {
+      matchingSongKeys.add(makeSongKey(rawArtist, track.name));
     }
   }
 

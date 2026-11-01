@@ -21,9 +21,9 @@ const textOf = (value, fallback = '') => {
   if (typeof value === 'string') return value.trim() || fallback;
   return String(value?.['#text'] || value?.name || fallback).trim();
 };
-const artistOf = track => textOf(track.artist, 'Unknown artist');
-const titleOf = track => textOf(track.name, 'Unknown track');
-const albumOf = track => textOf(track.album);
+const artistOf = track => ScrobbleVariants.resolveArtist(textOf(track.artist, 'Unknown artist'));
+const titleOf = track => ScrobbleVariants.resolveTrack(textOf(track.artist, 'Unknown artist'), textOf(track.name, 'Unknown track'));
+const albumOf = track => ScrobbleVariants.resolveAlbum(textOf(track.artist, 'Unknown artist'), textOf(track.album));
 const dateOf = track => {
   const uts = Number(track?.date?.uts);
   return Number.isFinite(uts) ? new Date(uts * 1000) : null;
@@ -31,9 +31,34 @@ const dateOf = track => {
 const formatDate = date => date ? date.toLocaleDateString() : '—';
 
 function matches(track) {
-  if (type === 'artist') return norm(artistOf(track)) === norm(name);
-  if (type === 'album') return norm(albumOf(track)) === norm(name) && norm(artistOf(track)) === norm(artist);
-  return norm(titleOf(track)) === norm(name) && norm(artistOf(track)) === norm(artist);
+  const canonicalArtist = type === 'artist' ? ScrobbleVariants.resolveArtist(name) : ScrobbleVariants.resolveArtist(artist);
+  if (type === 'artist') return norm(artistOf(track)) === norm(canonicalArtist);
+  if (type === 'album') return norm(albumOf(track)) === norm(ScrobbleVariants.resolveAlbum(artist, name)) && norm(artistOf(track)) === norm(canonicalArtist);
+  return norm(titleOf(track)) === norm(ScrobbleVariants.resolveTrack(artist, name)) && norm(artistOf(track)) === norm(canonicalArtist);
+}
+
+function renderAppliedVariants() {
+  const section = document.getElementById('appliedVariants');
+  const content = document.getElementById('appliedVariantsContent');
+  const rows = [];
+  const artistName = type === 'artist' ? name : artist;
+  const artistVariants = ScrobbleVariants.variantsFor('artists', '', artistName);
+  if (artistVariants.length > 1) rows.push(['Artist', artistVariants]);
+  if (type === 'album') {
+    const albumVariants = ScrobbleVariants.variantsFor('albums', artistName, name);
+    if (albumVariants.length > 1) rows.push(['Album', albumVariants]);
+  } else if (type === 'track') {
+    const trackVariants = ScrobbleVariants.variantsFor('tracks', artistName, name);
+    if (trackVariants.length > 1) rows.push(['Track', trackVariants]);
+  }
+  content.replaceChildren();
+  section.hidden = rows.length === 0;
+  for (const [label, values] of rows) {
+    const row = document.createElement('p');
+    const heading = document.createElement('strong'); heading.textContent = `${label}: `;
+    row.append(heading, document.createTextNode(values.join(' · ')));
+    content.append(row);
+  }
 }
 
 function aggregate(tracks, keyFn, labelFn) {
@@ -317,11 +342,16 @@ function render(scrobbles) {
   const scoped = scrobbles.filter(track => categoryFilter === 'all' || ScrobbleCategories.includesCategory(ScrobbleCategories.category(username, track), categoryFilter));
   const selected = scoped.filter(matches);
   if (!selected.length) throw new Error('No listening history was found for this item.');
+  renderAppliedVariants();
   const allEntries = entityEntries(scoped, type);
   const currentYear = new Date().getFullYear();
   const yearTracks = scoped.filter(track => dateOf(track)?.getFullYear() === currentYear);
   const currentYearEntries = entityEntries(yearTracks, type);
-  const targetKey = type === 'artist' ? norm(name) : `${norm(artist)}\u0000${norm(name)}`;
+  const displayName = type === 'artist' ? ScrobbleVariants.resolveArtist(name)
+    : type === 'album' ? ScrobbleVariants.resolveAlbum(artist, name)
+      : ScrobbleVariants.resolveTrack(artist, name);
+  const canonicalArtist = type === 'artist' ? '' : ScrobbleVariants.resolveArtist(artist);
+  const targetKey = type === 'artist' ? norm(displayName) : `${norm(canonicalArtist)}\u0000${norm(displayName)}`;
   const selectedDates = selected.map(dateOf).filter(Boolean);
   const yearCounts = new Map();
   const monthCounts = new Map();
@@ -334,13 +364,12 @@ function render(scrobbles) {
   const peak = counts => [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0];
   const peakYear = peak(yearCounts);
   const peakMonth = peak(monthCounts);
-  const displayName = type === 'artist' ? name : name;
   document.title = `${displayName} · Listening Details`;
   document.getElementById('kindLabel').textContent = type[0].toUpperCase() + type.slice(1);
   document.getElementById('title').textContent = displayName;
-  document.getElementById('subtitle').textContent = type === 'artist' ? '' : `by ${artist}`;
+  document.getElementById('subtitle').textContent = type === 'artist' ? '' : `by ${canonicalArtist}`;
   document.getElementById('stats').replaceChildren();
-  const entity = { type, artist: type === 'artist' ? '' : artist, name };
+  const entity = { type, artist: canonicalArtist, name: displayName };
   const entityTracks = scrobbles.filter(track => matches(track));
   const foundCategories = new Set(entityTracks.flatMap(track => {
     const value = ScrobbleCategories.category(username, track);
@@ -350,9 +379,9 @@ function render(scrobbles) {
   appendStat('Category', categoryLabel);
   const categoryControl = document.getElementById('entityCategory');
   categoryControl.replaceChildren();
-  const currentCategory = ScrobbleCategories.entityCategory(type, entity.artist, name, scrobbles);
-  const automaticCategory = ScrobbleCategories.automaticEntityCategory(type, entity.artist, name, scrobbles);
-  const explicitCategory = ScrobbleCategories.entityOverride(type, entity.artist, name);
+  const currentCategory = ScrobbleCategories.entityCategory(type, entity.artist, displayName, scrobbles);
+  const automaticCategory = ScrobbleCategories.automaticEntityCategory(type, entity.artist, displayName, scrobbles);
+  const explicitCategory = ScrobbleCategories.entityOverride(type, entity.artist, displayName);
   const inheritedCategory = type === 'artist' ? null : ScrobbleCategories.inheritedArtistCategory(entity.artist);
   const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
   for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
@@ -426,7 +455,11 @@ function render(scrobbles) {
 }
 
 async function loadMusicBrainzEntityDetails() {
-  const params = new URLSearchParams({ type, name, artist });
+  const canonicalName = type === 'artist' ? ScrobbleVariants.resolveArtist(name)
+    : type === 'album' ? ScrobbleVariants.resolveAlbum(artist, name)
+      : ScrobbleVariants.resolveTrack(artist, name);
+  const canonicalArtist = type === 'artist' ? '' : ScrobbleVariants.resolveArtist(artist);
+  const params = new URLSearchParams({ type, name: canonicalName, artist: canonicalArtist });
   try {
     const response = await fetch(`/api/musicbrainz/entity/${encodeURIComponent(username)}?${params}`);
     if (!response.ok) return;
@@ -524,6 +557,8 @@ async function load() {
 
   updateLoadingStep(3, 'Loading saved categories and MusicBrainz classifications…');
   await yieldToBrowser();
+  try { await ScrobbleVariants.load(username); }
+  catch (error) { console.warn('Could not load saved scrobble variants:', error.message); }
   try { await ScrobbleCategories.load(username, { artist: type === 'artist' ? name : artist }); }
   catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
 

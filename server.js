@@ -206,6 +206,30 @@ function getCategoryFilePath(username) {
   if (!localUserKey) throw new Error('A Last.fm username is required.');
   return path.join(DATA_DIR, `audiobook_categories_${encodeURIComponent(localUserKey)}.json`);
 }
+function getVariantFilePath(username) {
+  const localUserKey = String(username || '').trim().toLocaleLowerCase();
+  if (!localUserKey) throw new Error('A Last.fm username is required.');
+  return path.join(DATA_DIR, `scrobble_variants_${encodeURIComponent(localUserKey)}.json`);
+}
+
+async function loadVariants(username) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getVariantFilePath(username), 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? { version: 1, groups: { artists: [], albums: [], tracks: [], ...(parsed.groups || {}) } }
+      : { version: 1, groups: { artists: [], albums: [], tracks: [] } };
+  } catch (err) {
+    if (err.code === 'ENOENT') return { version: 1, groups: { artists: [], albums: [], tracks: [] } };
+    throw err;
+  }
+}
+
+async function saveVariants(username, variants) {
+  const filePath = getVariantFilePath(username);
+  const temporaryPath = `${filePath}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(variants, null, 2));
+  await fs.rename(temporaryPath, filePath);
+}
 
 async function loadCategories(username) {
   try {
@@ -873,8 +897,32 @@ app.get('/api/scrobbles/:username/categories', async (req, res) => {
   }
 });
 
+app.get('/api/scrobbles/:username/variants', async (req, res) => {
+  try {
+    return res.json({ username: req.params.username.trim(), variants: await loadVariants(req.params.username) });
+  } catch (err) {
+    logger.error('Variants', `Could not load saved variants for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/scrobbles/:username/variants', async (req, res) => {
+  const groups = req.body?.groups;
+  if (!groups || typeof groups !== 'object' || !['artists', 'albums', 'tracks'].every(key => Array.isArray(groups[key]))) {
+    return res.status(400).json({ error: 'Artist, album, and track variant groups are required.' });
+  }
+  try {
+    const variants = { version: 1, groups };
+    await saveVariants(req.params.username, variants);
+    return res.json({ username: req.params.username.trim(), variants });
+  } catch (err) {
+    logger.error('Variants', `Could not save variants for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/scrobbles/:username/categories', async (req, res) => {
-  const { type, artist = '', name, category, relatedTrackNames = [] } = req.body || {};
+  const { type, artist = '', name, category, relatedTrackNames = [], relatedEntityAliases = [] } = req.body || {};
   if (!['track', 'album', 'artist'].includes(type) || typeof name !== 'string' || !name.trim() || (type !== 'artist' && (typeof artist !== 'string' || !artist.trim())) || !['music', 'audiobook', 'both', 'auto'].includes(category)) {
     return res.status(400).json({ error: 'A valid type, name, and category are required.' });
   }
@@ -884,6 +932,14 @@ app.put('/api/scrobbles/:username/categories', async (req, res) => {
     const itemKey = `${type}\u0000${artist.trim().toLocaleLowerCase()}\u0000${name.trim().toLocaleLowerCase()}`;
     if (category === 'auto') delete categories[itemKey];
     else categories[itemKey] = category;
+    if (Array.isArray(relatedEntityAliases)) {
+      for (const alias of relatedEntityAliases) {
+        if (typeof alias?.name !== 'string' || !alias.name.trim() || typeof alias.artist !== 'string') continue;
+        const aliasKey = `${type}\u0000${alias.artist.trim().toLocaleLowerCase()}\u0000${alias.name.trim().toLocaleLowerCase()}`;
+        if (category === 'auto') delete categories[aliasKey];
+        else categories[aliasKey] = category;
+      }
+    }
     if (type === 'album' && category === 'audiobook' && Array.isArray(relatedTrackNames)) {
       for (const trackName of relatedTrackNames) {
         if (typeof trackName !== 'string' || !trackName.trim()) continue;

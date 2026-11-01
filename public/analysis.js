@@ -1,5 +1,6 @@
 const params = new URLSearchParams(location.search);
 const username = params.get('username') || '';
+document.getElementById('similarityLink').href = `similarity.html?username=${encodeURIComponent(username)}`;
 let scrobbles = [];
 let itemLimit = 25;
 let categoryFilter = 'all';
@@ -56,9 +57,10 @@ function keyForDate(date, granularity) {
 }
 
 function incrementRankingCounts(counts, track) {
-  const artist = textOf(track.artist, 'Unknown artist');
-  const title = textOf(track.name, 'Unknown track');
-  const album = textOf(track.album);
+  const rawArtist = textOf(track.artist, 'Unknown artist');
+  const artist = ScrobbleVariants.resolveArtist(rawArtist);
+  const title = ScrobbleVariants.resolveTrack(rawArtist, textOf(track.name, 'Unknown track'));
+  const album = ScrobbleVariants.resolveAlbum(rawArtist, textOf(track.album));
   const values = [
     ['tracks', `${artist}\u0000${title}`, title, artist],
     ...(album ? [['albums', `${artist}\u0000${album}`, album, artist]] : []),
@@ -133,9 +135,10 @@ async function updateInsights(categoryScopedScrobbles, updateId) {
       const time = date.getTime();
       const current = time >= currentStart && time <= currentEnd;
       const previous = time >= previousStart && time <= previousEnd;
-      const artist = textOf(track.artist, 'Unknown artist');
-      const title = textOf(track.name, 'Unknown track');
-      const album = textOf(track.album);
+      const rawArtist = textOf(track.artist, 'Unknown artist');
+      const artist = ScrobbleVariants.resolveArtist(rawArtist);
+      const title = ScrobbleVariants.resolveTrack(rawArtist, textOf(track.name, 'Unknown track'));
+      const album = ScrobbleVariants.resolveAlbum(rawArtist, textOf(track.album));
       const values = {
         tracks: [`${artist}\u0000${title}`, artist, title],
         albums: album ? [`${artist}\u0000${album}`, artist, album] : null,
@@ -383,6 +386,8 @@ async function loadScrobbles() {
     try { sessionStorage.setItem(`lastfm_scrobbles_${username.toLowerCase()}`, JSON.stringify(scrobbles)); } catch {}
   }
   if (loadingMessage) loadingMessage.textContent = 'Loading saved categories and MusicBrainz classifications…';
+  try { await ScrobbleVariants.load(username); }
+  catch (error) { console.warn('Could not load saved scrobble variants:', error.message); }
   try { await ScrobbleCategories.load(username); }
   catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
   ScrobbleCategories.prepare(scrobbles);

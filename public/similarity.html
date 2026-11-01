@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>Similarity Detection · Last.fm Scrobbles</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #121214; color: #e1e1e6; }
+    body { margin: 0; padding: 24px; } main { max-width: 1100px; margin: auto; }
+    h1 { color: #e5151f; } h2 { margin-top: 28px; } a { color: #ff6870; }
+    .muted { color: #a8a8b3; } .status { margin: 14px 0; }
+    .variant-card { background: #202024; border: 1px solid #393940; border-radius: 8px; padding: 16px; margin: 12px 0; }
+    .variant-card h3 { margin: 0 0 12px; } .variant-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid #323238; }
+    .variant-choice label { display: flex; gap: 9px; align-items: center; overflow-wrap: anywhere; cursor: pointer; }
+    button { background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 12px; cursor: pointer; }
+    .empty { color: #a8a8b3; padding: 12px 0; }
+    @media(max-width:600px) { body { padding: 14px; } .variant-choice { grid-template-columns: minmax(0,1fr) auto; } .variant-choice .count { grid-column: 1 / -1; } }
+  </style>
+</head>
+<body><main>
+  <a id="analysisLink">← Back to listening analysis</a>
+  <h1>Similarity detection</h1>
+  <p class="muted">Review spelling, punctuation, Unicode, and edition-name variations found in this library. Choose the spelling to use in reports. Matches are grouped conservatively by normalized text; review before saving.</p>
+  <div id="status" class="status">Loading scrobbles and saved variants…</div>
+  <div id="groups"></div>
+</main>
+<script src="variants.js"></script><script src="similarity.js"></script>
+</body></html>

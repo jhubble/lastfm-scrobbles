@@ -11,7 +11,10 @@
   const MIN_HEURISTIC_TRACK_PLAYS = 5;
   const load = async (username, options = {}) => {
     const params = new URLSearchParams();
-    if (options.artist) params.set('artist', options.artist);
+    if (options.artist) {
+      const artists = window.ScrobbleVariants?.variantsFor('artists', '', options.artist);
+      for (const artist of artists?.length ? artists : [options.artist]) params.append('artist', artist);
+    }
     const query = params.size ? `?${params}` : '';
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories${query}`);
     const data = await response.json();
@@ -61,12 +64,33 @@
     return fromMusicBrainz !== 'unknown' ? fromMusicBrainz : guess(track);
   };
   const category = (username, track) => {
-    const artistCategory = overrides[entityKey('artist', '', text(track.artist))];
+    const variants = window.ScrobbleVariants;
+    const rawArtist = text(track.artist);
+    const artist = variants?.resolveArtist(rawArtist) || rawArtist;
+    const title = variants?.resolveTrack(rawArtist, track.name) || track.name;
+    const album = variants?.resolveAlbum(rawArtist, text(track.album)) || text(track.album);
+    const artistCategory = overrides[entityKey('artist', '', artist)] || overrides[entityKey('artist', '', rawArtist)];
     if (artistCategory === 'music' || artistCategory === 'audiobook') return artistCategory;
-    return overrides[entityKey('track', text(track.artist), track.name)] || overrides[identity(track)] || overrides[entityKey('album', text(track.artist), text(track.album))] || automaticCategory(track);
+    return overrides[entityKey('track', artist, title)] || overrides[entityKey('track', rawArtist, track.name)] || overrides[identity(track)] || overrides[entityKey('album', artist, album)] || overrides[entityKey('album', rawArtist, text(track.album))] || automaticCategory(track);
   };
   const includesCategory = (value, filter) => value === filter || value === 'both';
-  const entityOverride = (type, artist, name) => overrides[entityKey(type, artist, name)] || null;
+  const entityOverride = (type, artist, name) => {
+    const direct = overrides[entityKey(type, artist, name)];
+    if (direct) return direct;
+    const variants = window.ScrobbleVariants;
+    if (!variants) return null;
+    const artists = type === 'artist' ? [''] : variants.variantsFor('artists', '', artist);
+    const names = type === 'artist' ? variants.variantsFor('artists', '', name)
+      : type === 'album' ? variants.variantsFor('albums', artist, name)
+        : variants.variantsFor('tracks', artist, name);
+    for (const artistName of artists.length ? artists : [artist]) {
+      for (const entityName of names.length ? names : [name]) {
+        const value = overrides[entityKey(type, artistName, entityName)];
+        if (value) return value;
+      }
+    }
+    return null;
+  };
   const entityCategory = (type, artist, name, scrobbles) => {
     const explicit = entityOverride(type, artist, name);
     if (type !== 'artist') {
@@ -74,11 +98,12 @@
       if (artistCategory === 'music' || artistCategory === 'audiobook') return artistCategory;
     }
     if (explicit) return explicit;
+    const variants = window.ScrobbleVariants;
     const selected = scrobbles.filter(track => type === 'artist'
-      ? normalized(text(track.artist)) === normalized(name)
+      ? normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(name)
       : type === 'album'
-        ? normalized(text(track.artist)) === normalized(artist) && normalized(text(track.album)) === normalized(name)
-        : normalized(text(track.artist)) === normalized(artist) && normalized(track.name) === normalized(name));
+        ? normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(artist) && normalized(variants?.resolveAlbum(text(track.artist), text(track.album)) || text(track.album)) === normalized(name)
+        : normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(artist) && normalized(variants?.resolveTrack(text(track.artist), track.name) || track.name) === normalized(name));
     return combinedCategory(selected.map(track => category('', track)));
   };
   const inheritedArtistCategory = artist => {
@@ -86,11 +111,12 @@
     return value === 'music' || value === 'audiobook' ? value : null;
   };
   const automaticEntityCategory = (type, artist, name, scrobbles) => {
+    const variants = window.ScrobbleVariants;
     const selected = scrobbles.filter(track => type === 'artist'
-      ? normalized(text(track.artist)) === normalized(name)
+      ? normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(name)
       : type === 'album'
-        ? normalized(text(track.artist)) === normalized(artist) && normalized(text(track.album)) === normalized(name)
-        : normalized(text(track.artist)) === normalized(artist) && normalized(track.name) === normalized(name));
+        ? normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(artist) && normalized(variants?.resolveAlbum(text(track.artist), text(track.album)) || text(track.album)) === normalized(name)
+        : normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(artist) && normalized(variants?.resolveTrack(text(track.artist), track.name) || track.name) === normalized(name));
     return combinedCategory(selected.map(automaticCategory));
   };
   const combinedCategory = values => {
@@ -99,13 +125,25 @@
     return categories.values().next().value || 'music';
   };
   const setCategory = async (username, entity, value, scrobbles = []) => {
+    const variants = window.ScrobbleVariants;
+    const relatedEntityAliases = [];
+    if (variants) {
+      const artists = entity.type === 'artist' ? [''] : variants.variantsFor('artists', '', entity.artist);
+      const names = entity.type === 'artist' ? variants.variantsFor('artists', '', entity.name)
+        : entity.type === 'album' ? variants.variantsFor('albums', entity.artist, entity.name)
+          : variants.variantsFor('tracks', entity.artist, entity.name);
+      for (const artist of artists.length ? artists : [entity.artist]) {
+        for (const name of names.length ? names : [entity.name]) relatedEntityAliases.push({ artist, name });
+      }
+    }
     const sameAlbumTracks = entity.type === 'album' && value === 'audiobook'
-      ? [...new Set(scrobbles.filter(track => normalized(text(track.artist)) === normalized(entity.artist) && normalized(text(track.album)) === normalized(entity.name))
-        .map(track => String(track.name || '').trim()).filter(Boolean))]
+      ? [...new Set(scrobbles.filter(track => normalized(variants?.resolveArtist(text(track.artist)) || text(track.artist)) === normalized(entity.artist)
+        && normalized(variants?.resolveAlbum(text(track.artist), text(track.album)) || text(track.album)) === normalized(entity.name))
+        .map(track => variants?.resolveTrack(text(track.artist), track.name) || String(track.name || '').trim()).filter(Boolean))]
       : [];
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...entity, category: value === 'auto' ? 'auto' : value, relatedTrackNames: sameAlbumTracks }),
+      body: JSON.stringify({ ...entity, category: value === 'auto' ? 'auto' : value, relatedTrackNames: sameAlbumTracks, relatedEntityAliases }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');
