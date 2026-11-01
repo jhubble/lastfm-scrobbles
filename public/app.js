@@ -620,6 +620,7 @@ if (usernameInput) {
 // ==========================================
 
 let mbEventSource = null;
+let mbEventSourceUsername = null;
 let mbCurrentPage = 1;
 let mbTotalPages = 1;
 let mbSearchQuery = '';
@@ -628,7 +629,6 @@ let mbFilterValue = 'all';
 let mbSortValue = 'firstScrobbledAsc';
 let mbLimitValue = 50;
 let mbSectionVisible = false;
-let mbLastTableRefreshTime = 0;
 
 function setMbStatus(msg) {
   const el = document.getElementById('mbStatus');
@@ -978,6 +978,11 @@ function refreshMusicBrainzView() {
 
 // Connect to MusicBrainz Server-Sent Events stream
 function connectMusicBrainzStream(username) {
+  const normalizedUsername = username.trim().toLowerCase();
+  if (mbEventSource && mbEventSourceUsername === normalizedUsername && mbEventSource.readyState !== EventSource.CLOSED) {
+    return;
+  }
+
   if (mbEventSource) {
     mbEventSource.close();
     mbEventSource = null;
@@ -993,6 +998,7 @@ function connectMusicBrainzStream(username) {
 
   const es = new EventSource(`/api/musicbrainz/stream?username=${encodeURIComponent(username)}`);
   mbEventSource = es;
+  mbEventSourceUsername = normalizedUsername;
 
   const handleProgress = (data) => {
     const percent = Math.min(100, Math.max(0, data.percent || 0));
@@ -1020,7 +1026,10 @@ function connectMusicBrainzStream(username) {
         if (data.status === 'paused') setMbStatus(data.progress?.message || 'Stopped with progress saved. Resume when ready.');
         if (data.status === 'completed') setMbStatus(data.progress?.message || 'MusicBrainz enrichment complete.');
         es.close();
-        if (mbEventSource === es) mbEventSource = null;
+        if (mbEventSource === es) {
+          mbEventSource = null;
+          mbEventSourceUsername = null;
+        }
         refreshMusicBrainzView();
       }
     } catch {}
@@ -1033,18 +1042,6 @@ function connectMusicBrainzStream(username) {
     } catch {}
   });
 
-  es.addEventListener('mb-track', (e) => {
-    // Throttle table reload during live stream to avoid hammering the DOM
-    const now = Date.now();
-    if (now - mbLastTableRefreshTime > 4000) {
-      mbLastTableRefreshTime = now;
-      fetchMusicBrainzStatus();
-      if (mbCurrentPage === 1 && !mbSearchQuery && mbFilterValue === 'all') {
-        loadMusicBrainzTable(1);
-      }
-    }
-  });
-
   es.addEventListener('mb-complete', (e) => {
     try {
       const data = JSON.parse(e.data);
@@ -1053,7 +1050,10 @@ function connectMusicBrainzStream(username) {
     setMbStatus('MusicBrainz enrichment complete!');
     setMbButtonsBusy(false);
     es.close();
-    mbEventSource = null;
+    if (mbEventSource === es) {
+      mbEventSource = null;
+      mbEventSourceUsername = null;
+    }
     refreshMusicBrainzView();
   });
 
@@ -1065,7 +1065,10 @@ function connectMusicBrainzStream(username) {
     setMbStatus('MusicBrainz enrichment paused.');
     setMbButtonsBusy(false);
     es.close();
-    mbEventSource = null;
+    if (mbEventSource === es) {
+      mbEventSource = null;
+      mbEventSourceUsername = null;
+    }
     refreshMusicBrainzView();
   });
 
@@ -1078,7 +1081,10 @@ function connectMusicBrainzStream(username) {
     }
     setMbButtonsBusy(false);
     es.close();
-    mbEventSource = null;
+    if (mbEventSource === es) {
+      mbEventSource = null;
+      mbEventSourceUsername = null;
+    }
     refreshMusicBrainzView();
   });
 }
