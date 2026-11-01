@@ -2,6 +2,7 @@ const query = new URLSearchParams(location.search);
 const username = query.get('username') || '';
 const status = document.getElementById('status');
 document.getElementById('analysisLink').href = `analysis.html?username=${encodeURIComponent(username)}`;
+let activeVariants = null;
 
 const sectionDefinitions = [
   { id: 'merged', title: 'Selected duplicates', description: 'Variants that are currently merged under the selected name.' },
@@ -73,7 +74,7 @@ function groupMatches(saved, candidate, type) {
     && (type === 'artists' || window.ScrobbleVariants.rawKey(saved.artist) === window.ScrobbleVariants.rawKey(candidate.artist));
 }
 
-async function saveCandidate(candidate, type, decision, canonical, candidates, variants) {
+async function saveCandidate(candidate, type, decision, canonical, candidates, variants, card) {
   const groups = structuredClone(variants.groups);
   const decisions = structuredClone(variants.decisions);
   const matches = item => groupMatches(item, candidate, type);
@@ -85,6 +86,14 @@ async function saveCandidate(candidate, type, decision, canonical, candidates, v
   const mergedVariants = [...new Set([...existingMerges.flatMap(group => group.variants || []), ...existingDecisions.flatMap(group => group.variants || []), ...candidate.variants])];
   if (decision === 'merged') {
     groups[type].push({ ...(type === 'artists' ? {} : { artist }), canonical, variants: mergedVariants });
+    if (type === 'artists') {
+      const priorArtistNames = new Set([...candidate.variants, ...existingMerges.flatMap(group => [group.canonical, ...(group.variants || [])])].map(window.ScrobbleVariants.rawKey));
+      for (const childType of ['albums', 'tracks']) {
+        for (const group of [...groups[childType], ...decisions[childType]]) {
+          if (priorArtistNames.has(window.ScrobbleVariants.rawKey(group.artist))) group.artist = canonical;
+        }
+      }
+    }
   } else if (decision !== 'unselected') {
     decisions[type].push({ ...(type === 'artists' ? {} : { artist }), status: decision, variants: mergedVariants });
   }
@@ -94,13 +103,38 @@ async function saveCandidate(candidate, type, decision, canonical, candidates, v
     const saved = await window.ScrobbleVariants.save(username, groups, decisions);
     variants.groups = saved.groups;
     variants.decisions = saved.decisions;
-    const refreshed = window.ScrobbleVariants.detect(window.__similarityScrobbles);
-    status.textContent = 'Decision saved to this account. Reports will apply merged variants automatically.';
-    renderCandidates(refreshed, variants);
+    candidate.status = decision;
+    candidate.saved = decision === 'merged';
+    candidate.canonical = decision === 'merged' ? canonical : null;
+    document.querySelectorAll('#groups button, #groups input').forEach(control => { control.disabled = false; });
+    updateCardState(card, candidate);
+    document.getElementById('dirtyNotice').hidden = false;
+    status.textContent = 'Saved to this account. Re-render the list when ready to refresh its sections.';
   } catch (error) {
     status.textContent = `Could not save this decision: ${error.message}`;
     document.querySelectorAll('#groups button, #groups input').forEach(control => { control.disabled = false; });
+    updateCardState(card, candidate);
   }
+}
+
+function updateCardState(card, candidate) {
+  if (!card) return;
+  const badge = card.querySelector('.decision-label');
+  if (badge) badge.textContent = candidate.status === 'merged' ? `Merged as “${candidate.canonical}”`
+    : candidate.status === 'ignore' ? 'Intentionally unselected'
+      : candidate.status === 'separate' ? 'Keeping separate' : 'Unselected';
+  card.querySelectorAll('[data-variant-value]').forEach(radio => {
+    radio.checked = candidate.status === 'merged' && radio.dataset.variantValue === candidate.canonical;
+  });
+  const customRadio = card.querySelector('[data-custom-radio]');
+  const customName = card.querySelector('[data-custom-name]');
+  const isCustom = candidate.status === 'merged' && !candidate.variants.includes(candidate.canonical);
+  if (customRadio) customRadio.checked = isCustom;
+  if (customName) customName.value = isCustom ? candidate.canonical : '';
+  card.querySelectorAll('[data-decision]').forEach(button => {
+    const decision = button.dataset.decision;
+    button.disabled = decision === candidate.status || (decision === 'unselected' && candidate.status === 'unselected');
+  });
 }
 
 function renderCard(candidate, type, variants, candidates) {
@@ -108,10 +142,12 @@ function renderCard(candidate, type, variants, candidates) {
   const title = document.createElement('h3');
   title.textContent = `${typeLabels[type]}${type === 'artists' ? '' : ` · ${candidate.artist}`} · ${candidate.plays.toLocaleString()} plays affected`;
   card.append(title);
+  const decisionLabel = document.createElement('div'); decisionLabel.className = 'decision-label muted'; card.append(decisionLabel);
   for (const value of candidate.variants) {
     const row = document.createElement('div'); row.className = 'variant-choice';
     const label = document.createElement('label');
     const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `variant-${type}-${candidate.variants.join('|')}`;
+    radio.dataset.variantValue = value;
     radio.checked = candidate.status === 'merged' && value === candidate.canonical;
     const name = document.createElement('span'); name.textContent = value;
     label.append(radio, name);
@@ -126,16 +162,40 @@ function renderCard(candidate, type, variants, candidates) {
       if (!results.hidden && !results.hasChildNodes()) renderScrobbleBatch(results, [...plays].reverse());
     });
     row.append(label, count, view, results); card.append(row);
-    radio.addEventListener('change', () => saveCandidate(candidate, type, 'merged', value, candidates, variants));
+    radio.addEventListener('change', () => saveCandidate(candidate, type, 'merged', value, candidates, variants, card));
   }
+  const customRow = document.createElement('div'); customRow.className = 'custom-choice';
+  const customLabel = document.createElement('label');
+  const customRadio = document.createElement('input'); customRadio.type = 'radio'; customRadio.name = `variant-${type}-${candidate.variants.join('|')}`;
+  customRadio.dataset.customRadio = 'true';
+  customRadio.checked = candidate.status === 'merged' && !candidate.variants.includes(candidate.canonical);
+  const customPrompt = document.createElement('span'); customPrompt.textContent = 'Use a custom name';
+  customLabel.append(customRadio, customPrompt);
+  const customName = document.createElement('input'); customName.type = 'text'; customName.maxLength = 200;
+  customName.dataset.customName = 'true';
+  customName.placeholder = 'Enter the name to use in reports';
+  customName.value = customRadio.checked ? candidate.canonical : '';
+  customName.addEventListener('focus', () => { customRadio.checked = true; });
+  const applyCustom = document.createElement('button'); applyCustom.type = 'button'; applyCustom.textContent = 'Use custom name';
+  applyCustom.addEventListener('click', () => {
+    const value = customName.value.trim();
+    if (!value) { status.textContent = 'Enter a custom name before applying it.'; customName.focus(); return; }
+    customRadio.checked = true;
+    saveCandidate(candidate, type, 'merged', value, candidates, variants, card);
+  });
+  customName.addEventListener('keydown', event => { if (event.key === 'Enter') applyCustom.click(); });
+  customRow.append(customLabel, customName, applyCustom);
+  card.append(customRow);
   const actions = document.createElement('div'); actions.className = 'variant-actions';
   for (const [decision, label] of [['ignore', 'Intentionally unselected'], ['separate', 'Keep different'], ['unselected', 'Clear decision']]) {
     const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+    button.dataset.decision = decision;
     button.disabled = candidate.status === decision || (decision === 'unselected' && candidate.status === 'unselected');
-    button.addEventListener('click', () => saveCandidate(candidate, type, decision, null, candidates, variants));
+    button.addEventListener('click', () => saveCandidate(candidate, type, decision, null, candidates, variants, card));
     actions.append(button);
   }
   card.append(actions);
+  updateCardState(card, candidate);
   return card;
 }
 
@@ -174,11 +234,28 @@ async function loadPage() {
   }
   window.__similarityScrobbles = scrobbles;
   const variants = await window.ScrobbleVariants.load(username);
+  activeVariants = variants;
   indexVariantScrobbles(scrobbles);
   const candidates = window.ScrobbleVariants.detect(scrobbles);
   const count = Object.values(candidates).reduce((total, groups) => total + groups.length, 0);
   status.textContent = `Reviewed ${scrobbles.length.toLocaleString()} scrobbles and found ${count.toLocaleString()} variation groups. Choose a canonical name to merge; other decisions are saved separately.`;
   renderCandidates(candidates, variants);
 }
+
+document.getElementById('rerenderList').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  status.textContent = 'Refreshing the similarity sections…';
+  try {
+    activeVariants = await window.ScrobbleVariants.load(username);
+    renderCandidates(window.ScrobbleVariants.detect(window.__similarityScrobbles), activeVariants);
+    document.getElementById('dirtyNotice').hidden = true;
+    status.textContent = 'Similarity sections refreshed.';
+  } catch (error) {
+    status.textContent = `Could not refresh the list: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 loadPage().catch(error => { status.textContent = error.message; });

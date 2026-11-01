@@ -13,8 +13,13 @@
     .variant-card h3 { margin: 0 0 12px; } .variant-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid #323238; }
     .section-nav { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 18px 0; padding: 12px 14px; background: #202024; border-radius: 7px; }
     .section-nav a { white-space: nowrap; }
+    .dirty-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 14px 0; background: #332611; border: 1px solid #805b18; border-radius: 7px; color: #fcd34d; }
+    .dirty-notice[hidden] { display: none; }
     .variant-choice { grid-template-columns: minmax(0, 1fr) auto auto; }
     .variant-choice label { display: flex; gap: 9px; align-items: center; overflow-wrap: anywhere; cursor: pointer; }
+    .custom-choice { display: grid; grid-template-columns: auto minmax(160px, 1fr) auto; gap: 10px; align-items: center; padding: 10px 0 0; margin-top: 8px; border-top: 1px solid #323238; }
+    .custom-choice label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .custom-choice input[type="text"] { min-width: 0; background: #17171a; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; }
     .scrobble-results { grid-column: 1 / -1; width: 100%; max-height: 45vh; overflow: auto; border-top: 1px solid #323238; margin-top: 8px; }
     .scrobble-results table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .scrobble-results th, .scrobble-results td { padding: 7px 8px; border-bottom: 1px solid #323238; text-align: left; vertical-align: top; }
@@ -25,7 +30,7 @@
     .variant-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
     .variant-actions button:disabled { opacity: .55; cursor: default; }
     .empty { color: #a8a8b3; padding: 12px 0; }
-    @media(max-width:600px) { body { padding: 14px; } .variant-choice { grid-template-columns: minmax(0,1fr) auto; } .variant-choice .count { grid-column: 1 / -1; } }
+    @media(max-width:600px) { body { padding: 14px; } .variant-choice { grid-template-columns: minmax(0,1fr) auto; } .variant-choice .count { grid-column: 1 / -1; } .custom-choice { grid-template-columns: minmax(0,1fr) auto; } .custom-choice input[type="text"] { grid-column: 1 / -1; grid-row: 2; width: 100%; box-sizing: border-box; } }
   </style>
 </head>
 <body><main>
@@ -36,6 +41,10 @@
     <a href="#merged">Selected duplicates</a><a href="#unselected">Unselected</a><a href="#ignore">Intentionally unselected</a><a href="#separate">Keep different</a>
   </nav>
   <div id="status" class="status">Loading scrobbles and saved variants…</div>
+  <div id="dirtyNotice" class="dirty-notice" role="status" aria-live="polite" hidden>
+    <span>Changes are saved. This list is stale until refreshed.</span>
+    <button id="rerenderList" type="button">Re-render list</button>
+  </div>
   <div id="groups"></div>
 </main>
 <script src="variants.js"></script><script src="similarity.js"></script>

@@ -93,7 +93,7 @@
           && (type === 'artists' || clean(item.artist) === clean(group.artist));
         const existing = (saved.groups[type] || []).find(matches);
         const decision = (saved.decisions[type] || []).find(matches);
-        const canonical = variants.includes(existing?.canonical) ? existing.canonical
+        const canonical = existing ? existing.canonical
           : [...group.counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
         const plays = [...group.counts.values()].reduce((total, count) => total + count, 0);
         return { artist: group.artist, variants, canonical, saved: Boolean(existing), status: existing ? 'merged' : decision?.status || 'unselected', counts: Object.fromEntries(group.counts), plays };
