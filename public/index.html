@@ -433,15 +433,25 @@
     }
     .mb-card.mb-expanded {
       position: fixed;
-      inset: 10px;
+      top: 10px;
+      bottom: 10px;
+      left: 10px;
+      width: calc(100vw - 20px);
+      max-width: none;
       z-index: 1000;
       margin: 0;
       overflow-y: auto;
       box-sizing: border-box;
     }
     .mb-card.mb-expanded .mb-table-wrapper {
+      width: 100%;
       min-height: 55vh;
       max-height: calc(100vh - 390px);
+    }
+    .mb-card.mb-expanded .mb-table {
+      width: 100%;
+      min-width: 1100px;
+      table-layout: fixed;
     }
     .mb-header {
       display: flex;
@@ -709,12 +719,6 @@
           <p class="mb-subtitle">
             Look up details for each unique song. Along with release dates and remaster detection, cache MusicBrainz release groups, types, artist credits, tags, and genres locally. Explicit MusicBrainz audiobook or music types classify tracks; ambiguous matches remain unknown.
           </p>
-          <div class="mb-badges">
-            <span class="mb-pill">⏱️ Rate Limit: 1 req/sec</span>
-            <span class="mb-pill">💾 Local Storage</span>
-            <span class="mb-pill">🔄 Incremental Sync</span>
-            <span class="mb-pill" id="mbUaIndicator">👤 User-Agent Provided</span>
-          </div>
         </div>
         <div>
           <button id="btnMbExpand" class="btn-secondary btn-small" onclick="toggleMusicBrainzDisplay()" aria-pressed="false">⛶ Expand Display</button>
