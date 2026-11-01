@@ -673,6 +673,16 @@ function toggleMusicBrainzSection(forceState) {
   }
 }
 
+function toggleMusicBrainzDisplay() {
+  const section = document.getElementById('musicbrainzSection');
+  const button = document.getElementById('btnMbExpand');
+  if (!section || !button) return;
+
+  const expanded = section.classList.toggle('mb-expanded');
+  button.setAttribute('aria-pressed', String(expanded));
+  button.innerText = expanded ? '↙ Restore Size' : '⛶ Expand Display';
+}
+
 async function fetchMusicBrainzStatus() {
   const username = document.getElementById('username')?.value.trim();
   if (!username) return;
@@ -788,7 +798,7 @@ async function loadMusicBrainzTable(page = 1) {
   mbCurrentPage = page;
   const tbody = document.getElementById('mbTableBody');
   if (tbody) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #a8a8b3; padding: 25px;">Loading songs...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #a8a8b3; padding: 25px;">Loading songs...</td></tr>`;
   }
 
   try {
@@ -811,7 +821,7 @@ async function loadMusicBrainzTable(page = 1) {
     updateMbPagination(totalItems);
   } catch (err) {
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #f87171; padding: 25px;">Error loading data: ${err.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #f87171; padding: 25px;">Error loading data: ${err.message}</td></tr>`;
     }
   }
 }
@@ -821,7 +831,7 @@ function renderMusicBrainzRows(items) {
   if (!tbody) return;
 
   if (!items || items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #a8a8b3; padding: 30px;">No songs match the current filter or search criteria.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #a8a8b3; padding: 30px;">No songs match the current filter or search criteria.</td></tr>`;
     return;
   }
 
@@ -830,17 +840,17 @@ function renderMusicBrainzRows(items) {
     const tr = document.createElement('tr');
 
     // 1. Song & Artist
-    const playsBadge = item.scrobbleCount > 1
-      ? `<span style="font-size: 11px; background: #29292e; color: #bbb; padding: 1px 5px; border-radius: 4px; margin-left: 6px;">${item.scrobbleCount} plays</span>`
-      : '';
     const songCell = `
       <div>
-        <strong style="color: #fff;">${escapeHtml(item.title)}</strong>${playsBadge}
+        <strong style="color: #fff;">${escapeHtml(item.title)}</strong>
         <div style="color: #a8a8b3; font-size: 12px; margin-top: 2px;">${escapeHtml(item.artist)}</div>
       </div>
     `;
 
-    // 2. First Scrobbled
+    // 2. Play Count
+    const playCountCell = `<strong>${(Number(item.scrobbleCount) || 0).toLocaleString()}</strong>`;
+
+    // 3. First Scrobbled
     const firstDateStr = item.firstScrobbledDate
       ? new Date(item.firstScrobbledDate).toLocaleDateString()
       : (item.firstScrobbledUts ? new Date(item.firstScrobbledUts * 1000).toLocaleDateString() : '-');
@@ -852,7 +862,7 @@ function renderMusicBrainzRows(items) {
       </div>
     `;
 
-    // 3. Scrobbled Release Year
+    // 4. Scrobbled Release Year
     const scrobYear = item.scrobbledReleaseYear || '-';
     let scrobCell = `<span>${scrobYear}</span>`;
     if (item.isLaterRelease && item.yearDifference > 0) {
@@ -864,7 +874,7 @@ function renderMusicBrainzRows(items) {
       `;
     }
 
-    // 4. Earliest Release Year & Title
+    // 5. Earliest Release Year & Title
     let earliestCell = '-';
     if (item.earliestReleaseYear) {
       const earTitle = item.earliestReleaseTitle ? `("${escapeHtml(item.earliestReleaseTitle)}")` : '';
@@ -880,7 +890,7 @@ function renderMusicBrainzRows(items) {
       earliestCell = `<span style="color: #71717a;">Unknown</span>`;
     }
 
-    // 5. MusicBrainz Status & Link
+    // 6. MusicBrainz Status & Link
     let statusBadge = '';
     if (item.mbStatus === 'found') {
       if (item.isLaterRelease) {
@@ -915,6 +925,7 @@ function renderMusicBrainzRows(items) {
 
     tr.innerHTML = `
       <td>${songCell}</td>
+      <td>${playCountCell}</td>
       <td>${firstCell}</td>
       <td>${scrobCell}</td>
       <td>${earliestCell}</td>

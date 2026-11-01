@@ -431,6 +431,18 @@
       background: #191622;
       box-shadow: 0 4px 14px rgba(121, 40, 202, 0.15);
     }
+    .mb-card.mb-expanded {
+      position: fixed;
+      inset: 10px;
+      z-index: 1000;
+      margin: 0;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    .mb-card.mb-expanded .mb-table-wrapper {
+      min-height: 55vh;
+      max-height: calc(100vh - 390px);
+    }
     .mb-header {
       display: flex;
       justify-content: space-between;
@@ -705,6 +717,7 @@
           </div>
         </div>
         <div>
+          <button id="btnMbExpand" class="btn-secondary btn-small" onclick="toggleMusicBrainzDisplay()" aria-pressed="false">⛶ Expand Display</button>
           <button class="btn-secondary btn-small" onclick="toggleMusicBrainzSection(false)">✕ Close Section</button>
         </div>
       </div>
@@ -792,17 +805,18 @@
         <table class="mb-table">
           <thead>
             <tr>
-              <th style="width: 24%;">Song &amp; Artist</th>
-              <th style="width: 19%;">First Scrobbled</th>
+              <th style="width: 21%;">Song &amp; Artist</th>
+              <th style="width: 8%;">Play Count</th>
+              <th style="width: 17%;">First Scrobbled</th>
               <th style="width: 12%;">Scrobbled Release</th>
-              <th style="width: 17%;">Earliest Release Year</th>
-              <th style="width: 14%;">MB Classification</th>
+              <th style="width: 15%;">Earliest Release Year</th>
+              <th style="width: 13%;">MB Classification</th>
               <th style="width: 14%;">MusicBrainz Status</th>
             </tr>
           </thead>
           <tbody id="mbTableBody">
             <tr>
-              <td colspan="6" style="text-align: center; color: #888; padding: 25px;">
+              <td colspan="7" style="text-align: center; color: #888; padding: 25px;">
                 Enter a username and click "Start / Resume Enrichment" or load songs to view details.
               </td>
             </tr>

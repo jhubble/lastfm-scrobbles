@@ -243,7 +243,7 @@ export function extractUniqueSongsFromScrobbles(scrobbles) {
       if (scrobbleUts < existing.firstScrobbledUts) {
         existing.firstScrobbledUts = scrobbleUts;
         existing.firstScrobbledDate = track.date?.['#text'] || new Date(scrobbleUts * 1000).toISOString();
-        existing.firstScrobbledAlbum = track.album?.['#text'] || track.album?.name || track.album || '';
+        existing.firstScrobbledAlbum = normalizeAlbumTitle(track.album);
         existing.firstScrobbledAlbumMbid = track.album?.mbid || null;
       }
     } else {
@@ -256,7 +256,7 @@ export function extractUniqueSongsFromScrobbles(scrobbles) {
         artistMbid: track.artist?.mbid || null,
         firstScrobbledUts: scrobbleUts,
         firstScrobbledDate: track.date?.['#text'] || new Date(scrobbleUts * 1000).toISOString(),
-        firstScrobbledAlbum: track.album?.['#text'] || track.album?.name || track.album || '',
+        firstScrobbledAlbum: normalizeAlbumTitle(track.album),
         firstScrobbledAlbumMbid: track.album?.mbid || null,
         scrobbleCount: 1,
       });
@@ -271,6 +271,15 @@ export function extractUniqueSongsFromScrobbles(scrobbles) {
     a.songKey.localeCompare(b.songKey)
   );
   return list;
+}
+
+function normalizeAlbumTitle(album) {
+  if (typeof album === 'string') return album.trim();
+  if (!album || typeof album !== 'object') return '';
+  for (const value of [album['#text'], album.name, album.title]) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
 }
 
 // Analyze recording to find the earliest date and match against the scrobbled album
@@ -915,6 +924,7 @@ export async function getMusicBrainzData(username, params = {}) {
       return {
         ...us,
         ...enriched,
+        firstScrobbledAlbum: normalizeAlbumTitle(enriched.firstScrobbledAlbum) || us.firstScrobbledAlbum,
         musicbrainzCategory: enriched.musicbrainzCategory || 'unknown',
       };
     }
