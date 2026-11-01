@@ -629,6 +629,7 @@ let mbFilterValue = 'all';
 let mbSortValue = 'firstScrobbledAsc';
 let mbLimitValue = 50;
 let mbSectionVisible = false;
+let mbViewLoadId = 0;
 
 function setMbStatus(msg) {
   const el = document.getElementById('mbStatus');
@@ -1017,9 +1018,18 @@ function onMbLimitChange(val) {
   loadMusicBrainzTable(1);
 }
 
-function refreshMusicBrainzView() {
-  fetchMusicBrainzStatus();
-  loadMusicBrainzTable(mbCurrentPage);
+async function refreshMusicBrainzView() {
+  const loadId = ++mbViewLoadId;
+  const indicator = document.getElementById('mbFetchingIndicator');
+  if (indicator) indicator.hidden = false;
+  try {
+    await Promise.allSettled([
+      fetchMusicBrainzStatus(),
+      loadMusicBrainzTable(mbCurrentPage),
+    ]);
+  } finally {
+    if (loadId === mbViewLoadId && indicator) indicator.hidden = true;
+  }
 }
 
 // Connect to MusicBrainz Server-Sent Events stream

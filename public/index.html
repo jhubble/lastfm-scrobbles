@@ -454,6 +454,29 @@
       min-width: 1100px;
       table-layout: fixed;
     }
+    .mb-fetching-indicator {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #d8b4fe;
+      background: #231e34;
+      border: 1px solid #3b2d54;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin: 0 0 14px;
+      font-size: 14px;
+    }
+    .mb-fetching-indicator[hidden] { display: none; }
+    .mb-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #654b84;
+      border-top-color: #e9d5ff;
+      border-radius: 50%;
+      animation: mb-spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+    @keyframes mb-spin { to { transform: rotate(360deg); } }
     .mb-header {
       display: flex;
       justify-content: space-between;
@@ -745,6 +768,11 @@
           <button id="btnMbExpand" class="btn-secondary btn-small" onclick="toggleMusicBrainzDisplay()" aria-pressed="false">⛶ Expand Display</button>
           <button class="btn-secondary btn-small" onclick="toggleMusicBrainzSection(false)">✕ Close Section</button>
         </div>
+      </div>
+
+      <div id="mbFetchingIndicator" class="mb-fetching-indicator" role="status" aria-live="polite" hidden>
+        <span class="mb-spinner" aria-hidden="true"></span>
+        <span>Fetching MusicBrainz data…</span>
       </div>
 
       <!-- MusicBrainz Statistics Overview -->

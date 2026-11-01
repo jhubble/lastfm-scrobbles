@@ -168,7 +168,12 @@ async function rateLimitedFetch(url, abortSignal, attempt = 1) {
     }
 
     if (!res.ok) {
-      throw new Error(`MusicBrainz API returned HTTP ${res.status}`);
+      let responseDetail = '';
+      try {
+        const body = (await res.text()).replace(/\s+/g, ' ').trim();
+        if (body) responseDetail = `; response: ${body.slice(0, 300)}`;
+      } catch {}
+      throw new Error(`MusicBrainz API returned HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}${responseDetail}`);
     }
 
     const data = await res.json();
@@ -448,9 +453,9 @@ export function parseRecordingDetails(recording, scrobbledAlbum, scrobbledTrackT
   };
 }
 
-async function fetchRecordingDetails(recordingId, scrobbledAlbum, title, abortSignal, fallback = null) {
+async function fetchRecordingDetails(recordingId, scrobbledAlbum, title, abortSignal, fallback = null, artist = '') {
+  const url = `${MUSICBRAINZ_BASE_URL}recording/${recordingId}?inc=releases+artist-credits+release-groups+tags+genres&fmt=json`;
   try {
-    const url = `${MUSICBRAINZ_BASE_URL}recording/${recordingId}?inc=releases+artist-credits+release-groups+tags+genres&fmt=json`;
     const recording = await rateLimitedFetch(url, abortSignal);
     if (recording?.id) return {
       ...parseRecordingDetails(recording, scrobbledAlbum, title),
@@ -458,7 +463,7 @@ async function fetchRecordingDetails(recordingId, scrobbledAlbum, title, abortSi
     };
   } catch (err) {
     if (abortSignal?.aborted) throw err;
-    logger.debug('MusicBrainz', `Detailed recording lookup failed for ${recordingId}: ${err.message}`);
+    logger.debug('MusicBrainz', `Detailed recording lookup failed: artist="${artist || 'unknown'}", track="${title}", album="${scrobbledAlbum || 'unknown'}", recordingId=${recordingId}, request=${url}, error=${err.message}`);
   }
   return fallback ? {
     ...parseRecordingDetails(fallback, scrobbledAlbum, title),
@@ -494,7 +499,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   // 1. If we have a track MBID from Last.fm, we can try direct recording lookup first
   if (trackMbid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackMbid)) {
     try {
-      const details = await fetchRecordingDetails(trackMbid, firstScrobbledAlbum, title, abortSignal);
+      const details = await fetchRecordingDetails(trackMbid, firstScrobbledAlbum, title, abortSignal, null, artist);
       if (details) {
         return {
           status: 'found',
@@ -504,7 +509,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
       }
     } catch (err) {
       if (abortSignal && abortSignal.aborted) throw err;
-      logger.debug('MusicBrainz', `Direct MBID lookup failed for ${trackMbid}: ${err.message}. Falling back to search.`);
+      logger.debug('MusicBrainz', `Direct MBID lookup failed: artist="${artist}", track="${title}", album="${firstScrobbledAlbum || 'unknown'}", recordingId=${trackMbid}, error=${err.message}. Falling back to search.`);
     }
   }
 
@@ -551,7 +556,7 @@ export async function lookupSongInMusicBrainz(song, abortSignal) {
   if (result && result.recordings && result.recordings.length > 0) {
     // Prefer exact title/artist candidates, then the earliest known recording date.
     const bestMatch = chooseBestRecording(result.recordings, artist, title);
-    const details = await fetchRecordingDetails(bestMatch.id, firstScrobbledAlbum, title, abortSignal, bestMatch);
+    const details = await fetchRecordingDetails(bestMatch.id, firstScrobbledAlbum, title, abortSignal, bestMatch, artist);
     return {
       status: 'found',
       source: 'search',
