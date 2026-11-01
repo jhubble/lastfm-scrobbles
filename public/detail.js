@@ -63,6 +63,54 @@ function appendStat(label, value) {
   box.append(title, val); document.getElementById('stats').append(box);
 }
 
+function renderTrackScrobbleHistory(scrobbles) {
+  const section = document.getElementById('trackScrobbleHistory');
+  const content = document.getElementById('trackScrobbleHistoryContent');
+  if (!section || !content) return;
+  section.hidden = type !== 'track';
+  content.replaceChildren();
+  if (type !== 'track') return;
+
+  const plays = scrobbles
+    .filter(matches)
+    .map(track => ({ track, date: dateOf(track) }))
+    .sort((a, b) => (b.date?.getTime() ?? -Infinity) - (a.date?.getTime() ?? -Infinity));
+  document.getElementById('trackScrobbleHistoryHeading').textContent = `All scrobbles for this track (${plays.length.toLocaleString()})`;
+
+  if (!plays.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No scrobbles found for this track.';
+    content.append(empty);
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'scrobble-history';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const header = document.createElement('tr');
+  for (const label of ['Played at', 'Album']) {
+    const th = document.createElement('th');
+    th.textContent = label;
+    header.append(th);
+  }
+  thead.append(header);
+  const tbody = document.createElement('tbody');
+  for (const { track, date } of plays) {
+    const row = document.createElement('tr');
+    const dateCell = document.createElement('td');
+    dateCell.textContent = date && Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Date unavailable';
+    const albumCell = document.createElement('td');
+    albumCell.textContent = albumOf(track) || '—';
+    row.append(dateCell, albumCell);
+    tbody.append(row);
+  }
+  table.append(thead, tbody);
+  wrap.append(table);
+  content.append(wrap);
+}
+
 function relatedEntities(tracks, kind) {
   const found = new Map();
   for (const track of tracks) {
@@ -268,6 +316,7 @@ function render(scrobbles) {
       buildRelatedTable('Artists for this track', artists, 'artist', 'No artists found.', 'Artist', 'Album'),
     );
   }
+  renderTrackScrobbleHistory(scrobbles);
   document.getElementById('content').hidden = false;
   document.getElementById('loading').hidden = true;
 }

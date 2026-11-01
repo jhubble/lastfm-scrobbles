@@ -26,6 +26,9 @@
     .sort-button:hover { color: #ff6870; }
     td:first-child { overflow-wrap: anywhere; }
     .related-items a { display: block; padding: 2px 0; }
+    .scrobble-history { max-height: 70vh; overflow: auto; }
+    .scrobble-history th { position: sticky; top: 0; background: #202024; }
+    .scrobble-history td:first-child { white-space: nowrap; }
     .count { white-space: nowrap; color: #a8a8b3; }
     .category-editor { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
     .category-select { width: 140px; min-width: 140px; box-sizing: border-box; background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; }
@@ -53,6 +56,10 @@
         <div id="musicbrainzContent"></div>
       </section>
       <div class="related-grid" id="related"></div>
+      <section class="card" id="trackScrobbleHistory" hidden>
+        <h2 id="trackScrobbleHistoryHeading">All scrobbles for this track</h2>
+        <div id="trackScrobbleHistoryContent"></div>
+      </section>
     </div>
   </main>
   <script src="audiobooks.js"></script>
