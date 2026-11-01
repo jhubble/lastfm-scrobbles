@@ -31,6 +31,8 @@
     .scrobble-history td:first-child { white-space: nowrap; }
     .count { white-space: nowrap; color: #a8a8b3; }
     .category-editor { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+    .detail-actions { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+    .detail-actions button { background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; cursor: pointer; }
     .category-select { width: 140px; min-width: 140px; box-sizing: border-box; background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; }
     .loading { margin: 15px 0; padding: 14px; background: #202024; border-radius: 8px; }
     .loading-heading { display: flex; align-items: center; gap: 12px; font-weight: 600; }
@@ -51,6 +53,7 @@
 <body>
   <main>
     <a href="analysis.html" id="backLink">← Back to analysis</a>
+    <div class="detail-actions"><button type="button" id="copyDetailLink">Copy direct link</button></div>
     <div id="loading" class="loading" role="status" aria-live="polite" aria-busy="true">
       <div class="loading-heading"><span id="loadingSpinner" class="loading-spinner" aria-hidden="true"></span><span id="loadingMessage">Loading listening details…</span></div>
       <ol class="loading-steps">

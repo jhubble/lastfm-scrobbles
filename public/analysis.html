@@ -34,6 +34,9 @@
     .plays { color: #a8a8b3; white-space: nowrap; font-size: 13px; }
     .empty { color: #a8a8b3; }
     .loading { display: flex; align-items: center; gap: 10px; padding: 14px 16px; margin: 14px 0; background: #202024; border-radius: 8px; color: #d4d4d8; }
+    .stale-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 14px 0; background: #332611; border: 1px solid #805b18; border-radius: 8px; color: #fcd34d; }
+    .stale-notice[hidden] { display: none; }
+    .stale-notice button { white-space: nowrap; background: #6b4a12; border-color: #a87820; }
     .spinner { width: 18px; height: 18px; border: 2px solid #484850; border-top-color: #e5151f; border-radius: 50%; animation: spin 0.8s linear infinite; flex: 0 0 auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .section-nav { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 14px; }
@@ -54,6 +57,10 @@
     <a class="muted" href="/">← Back to dashboard</a>
     <h1>Listening Analysis</h1>
     <div id="summary" class="muted">Loading scrobbles…</div>
+    <div id="analysisStale" class="stale-notice" role="status" hidden>
+      <span>Category changes mean these results may be out of date.</span>
+      <button id="updateAnalysisView" type="button">↻ Update View</button>
+    </div>
     <div id="loadingIndicator" class="loading" role="status" aria-live="polite">
       <span class="spinner" aria-hidden="true"></span><span id="loadingMessage">Loading your scrobbles and preparing analysis…</span>
     </div>

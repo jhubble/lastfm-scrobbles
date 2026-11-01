@@ -23,6 +23,22 @@ function finishAnalysisLoading(updateId) {
   indicator.setAttribute('aria-busy', 'false');
 }
 
+function markAnalysisStale() {
+  analysisUpdateId++;
+  const indicator = document.getElementById('loadingIndicator');
+  if (indicator) {
+    indicator.style.display = 'none';
+    indicator.setAttribute('aria-busy', 'false');
+  }
+  const notice = document.getElementById('analysisStale');
+  if (notice) notice.hidden = false;
+}
+
+function clearAnalysisStale() {
+  const notice = document.getElementById('analysisStale');
+  if (notice) notice.hidden = true;
+}
+
 function textOf(value, fallback = '') {
   if (typeof value === 'string') return value.trim() || fallback;
   return String(value?.['#text'] || value?.name || fallback).trim();
@@ -187,21 +203,32 @@ function renderList(id, entries) {
     control.className = 'category-select';
     control.setAttribute('aria-label', `Category for ${item.primary}`);
     const selectedCategory = ScrobbleCategories.entityCategory(entityType, entity.artist, entity.name, scrobbles);
+    const automaticCategory = ScrobbleCategories.automaticEntityCategory(entityType, entity.artist, entity.name, scrobbles);
+    const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
     const explicitCategory = ScrobbleCategories.entityOverride(entityType, entity.artist, entity.name);
     for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
-      const option = document.createElement('option'); option.value = value; option.textContent = label;
+      const option = document.createElement('option'); option.value = value;
+      option.textContent = value === 'auto' ? `Automatic · ${automaticLabel}` : label;
       option.selected = value === 'auto' ? !explicitCategory : selectedCategory === value;
       control.append(option);
     }
     control.addEventListener('change', async () => {
+      const previousSelection = explicitCategory || 'auto';
       control.disabled = true;
       try {
-        await ScrobbleCategories.setCategory(username, entity, control.value);
-        updateAnalysis();
+        await ScrobbleCategories.setCategory(username, entity, control.value, scrobbles);
       } catch (error) {
         alert(error.message);
-        updateAnalysis();
+        control.value = previousSelection;
+        control.disabled = false;
+        return;
       }
+      if (categoryFilter === 'all') {
+        control.disabled = false;
+        return;
+      }
+      control.disabled = false;
+      markAnalysisStale();
     });
     row.append(control);
   }
@@ -209,6 +236,7 @@ function renderList(id, entries) {
 
 async function updateAnalysis() {
   const updateId = ++analysisUpdateId;
+  clearAnalysisStale();
   setAnalysisLoading('Filtering scrobbles for the selected time range…');
   await nextAnalysisFrame();
   const filtered = [];
@@ -249,6 +277,7 @@ async function updateAnalysis() {
 }
 
 document.getElementById('categoryFilter').addEventListener('change', event => { categoryFilter = event.target.value; updateAnalysis(); });
+document.getElementById('updateAnalysisView').addEventListener('click', () => updateAnalysis());
 
 function setRollingRange(days, label) {
   const end = new Date();

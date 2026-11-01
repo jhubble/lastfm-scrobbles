@@ -864,7 +864,7 @@ app.get('/api/scrobbles/:username/categories', async (req, res) => {
     const username = req.params.username.trim();
     const [categories, musicBrainzClassifications] = await Promise.all([
       loadCategories(username),
-      getMusicBrainzClassifications(username),
+      getMusicBrainzClassifications(username, req.query.artist || ''),
     ]);
     return res.json({ username, categories, musicBrainzClassifications });
   } catch (err) {
@@ -874,7 +874,7 @@ app.get('/api/scrobbles/:username/categories', async (req, res) => {
 });
 
 app.put('/api/scrobbles/:username/categories', async (req, res) => {
-  const { type, artist = '', name, category } = req.body || {};
+  const { type, artist = '', name, category, relatedTrackNames = [] } = req.body || {};
   if (!['track', 'album', 'artist'].includes(type) || typeof name !== 'string' || !name.trim() || (type !== 'artist' && (typeof artist !== 'string' || !artist.trim())) || !['music', 'audiobook', 'both', 'auto'].includes(category)) {
     return res.status(400).json({ error: 'A valid type, name, and category are required.' });
   }
@@ -884,6 +884,13 @@ app.put('/api/scrobbles/:username/categories', async (req, res) => {
     const itemKey = `${type}\u0000${artist.trim().toLocaleLowerCase()}\u0000${name.trim().toLocaleLowerCase()}`;
     if (category === 'auto') delete categories[itemKey];
     else categories[itemKey] = category;
+    if (type === 'album' && category === 'audiobook' && Array.isArray(relatedTrackNames)) {
+      for (const trackName of relatedTrackNames) {
+        if (typeof trackName !== 'string' || !trackName.trim()) continue;
+        const trackKey = `track\u0000${artist.trim().toLocaleLowerCase()}\u0000${trackName.trim().toLocaleLowerCase()}`;
+        categories[trackKey] = 'audiobook';
+      }
+    }
     await fs.writeFile(getCategoryFilePath(username), JSON.stringify(categories, null, 2));
     return res.json({ username, categories });
   } catch (err) {
@@ -1057,9 +1064,11 @@ app.post('/api/musicbrainz/start', async (req, res) => {
   }
 
   try {
+    const manualCategories = await loadCategories(username.trim());
     const result = await startMusicBrainzJob(username.trim(), {
       restart: Boolean(restart),
       improbableOnly: Boolean(improbableOnly),
+      manualCategories,
     });
     return res.json({
       message: result.message || (result.alreadyRunning ? 'MusicBrainz enrichment is already running.' : 'MusicBrainz enrichment started.'),

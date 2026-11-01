@@ -6,21 +6,31 @@
   let overrides = {};
   let musicBrainzClassifications = {};
   let burstAlbums = new Set();
-  const load = async username => {
-    const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories`);
+  let trackPlayCounts = new Map();
+  // Require some repeat evidence before using ambiguous title/album/listening-pattern clues.
+  const MIN_HEURISTIC_TRACK_PLAYS = 5;
+  const load = async (username, options = {}) => {
+    const params = new URLSearchParams();
+    if (options.artist) params.set('artist', options.artist);
+    const query = params.size ? `?${params}` : '';
+    const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories${query}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load audiobook categories.');
     overrides = data.categories || {};
     musicBrainzClassifications = data.musicBrainzClassifications || {};
   };
-  const audiobookPattern = /\b(audiobook|audio book|unabridged|abridged|narrated by|chapter\s*\d+|part\s*\d+|audible)\b/i;
+  const audiobookPattern = /\b(audiobook|audio book|unabridged|abridged|narrated by|chapter\s*\d+|audible)\b/i;
+  const audiobookPartPattern = /\bpart\s*\d+\b/i;
   const albumIdentity = track => `${normalized(text(track.artist))}\u0000${normalized(text(track.album))}`;
   const entityKey = (type, artist, name) => `${type}\u0000${normalized(artist)}\u0000${normalized(name)}`;
   const musicBrainzKey = track => [text(track.artist), track.name].map(value => String(value || '')
     .normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()).join(':::');
   const prepare = scrobbles => {
     const albums = new Map();
+    trackPlayCounts = new Map();
     for (const track of scrobbles) {
+      const trackKey = identity(track);
+      trackPlayCounts.set(trackKey, (trackPlayCounts.get(trackKey) || 0) + 1);
       const album = text(track.album);
       const uts = Number(track?.date?.uts);
       if (!album || !Number.isFinite(uts)) continue;
@@ -40,7 +50,9 @@
   const guess = track => {
     const title = normalized(track.name);
     const album = normalized(text(track.album));
-    if (audiobookPattern.test([text(track.artist), track.name, text(track.album)].join(' ')) || (title && album && title === album) || burstAlbums.has(albumIdentity(track))) return 'audiobook';
+    if (audiobookPattern.test([text(track.artist), track.name, text(track.album)].join(' '))) return 'audiobook';
+    const hasEnoughPlays = (trackPlayCounts.get(identity(track)) || 0) >= MIN_HEURISTIC_TRACK_PLAYS;
+    if (hasEnoughPlays && ((title && album && title === album) || burstAlbums.has(albumIdentity(track)) || audiobookPartPattern.test([track.name, text(track.album)].join(' ')))) return 'audiobook';
     return 'music';
   };
   const musicBrainzCategory = (_username, track) => musicBrainzClassifications[musicBrainzKey(track)] || 'unknown';
@@ -74,10 +86,14 @@
     if (categories.has('both') || (categories.has('music') && categories.has('audiobook'))) return 'both';
     return categories.values().next().value || 'music';
   };
-  const setCategory = async (username, entity, value) => {
+  const setCategory = async (username, entity, value, scrobbles = []) => {
+    const sameAlbumTracks = entity.type === 'album' && value === 'audiobook'
+      ? [...new Set(scrobbles.filter(track => normalized(text(track.artist)) === normalized(entity.artist) && normalized(text(track.album)) === normalized(entity.name))
+        .map(track => String(track.name || '').trim()).filter(Boolean))]
+      : [];
     const response = await fetch(`/api/scrobbles/${encodeURIComponent(username)}/categories`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...entity, category: value === 'auto' ? 'auto' : value }),
+      body: JSON.stringify({ ...entity, category: value === 'auto' ? 'auto' : value, relatedTrackNames: sameAlbumTracks }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save audiobook category.');

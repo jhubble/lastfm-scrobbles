@@ -203,7 +203,7 @@ function attachRelated(records, sourceTracks, groupingKey, relatedKind) {
   return records.map(record => ({ ...record, related: relatedEntities(grouped.get(record.key) || [], relatedKind) }));
 }
 
-function buildRelatedTable(title, records, kind, emptyText, itemHeading, relatedHeading) {
+function buildRelatedTable(title, records, kind, emptyText, itemHeading, relatedHeading, categoryScrobbles = null) {
   const section = document.createElement('section'); section.className = 'card related';
   const heading = document.createElement('h2'); heading.textContent = title; section.append(heading);
   if (!records.length) {
@@ -215,6 +215,7 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
   const header = document.createElement('tr');
   const columns = [
     { key: 'label', label: itemHeading },
+    ...(kind === 'album' && categoryScrobbles ? [{ key: 'category', label: 'Category' }] : []),
     { key: 'related', label: relatedHeading },
     { key: 'count', label: 'Listens' },
     { key: 'first', label: 'First listened' },
@@ -230,6 +231,35 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
       if (kind) {
         const link = document.createElement('a'); link.href = detailUrl(kind, record.linkName || record.label, record.artist || ''); link.textContent = record.label; itemCell.append(link);
       } else itemCell.textContent = record.label;
+      if (kind === 'album' && categoryScrobbles) {
+        const categoryCell = document.createElement('td');
+        const entity = { type: 'album', artist: record.artist || '', name: record.linkName || record.label };
+        const control = document.createElement('select');
+        control.className = 'category-select';
+        control.setAttribute('aria-label', `Category for album ${entity.name}`);
+        const currentCategory = ScrobbleCategories.entityCategory('album', entity.artist, entity.name, categoryScrobbles);
+        const automaticCategory = ScrobbleCategories.automaticEntityCategory('album', entity.artist, entity.name, categoryScrobbles);
+        const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
+        const explicitCategory = ScrobbleCategories.entityOverride('album', entity.artist, entity.name);
+        for (const [value, label] of [['music', 'Music'], ['audiobook', 'Audiobook'], ['both', 'Both'], ['auto', 'Automatic']]) {
+          const option = document.createElement('option'); option.value = value;
+          option.textContent = value === 'auto' ? `Automatic · ${automaticLabel}` : label;
+          option.selected = value === 'auto' ? !explicitCategory : currentCategory === value;
+          control.append(option);
+        }
+        control.addEventListener('change', async () => {
+          control.disabled = true;
+          try {
+            await ScrobbleCategories.setCategory(username, entity, control.value, categoryScrobbles);
+            render(scrobbles);
+          } catch (error) {
+            alert(error.message);
+            render(scrobbles);
+          }
+        });
+        categoryCell.append(control);
+        row.append(itemCell, categoryCell);
+      } else row.append(itemCell);
       const relatedCell = document.createElement('td');
       if (record.related?.length) {
         relatedCell.className = 'related-items';
@@ -241,7 +271,7 @@ function buildRelatedTable(title, records, kind, emptyText, itemHeading, related
       const countCell = document.createElement('td'); countCell.className = 'count'; countCell.textContent = record.count.toLocaleString();
       const firstCell = document.createElement('td'); firstCell.textContent = formatDate(record.first);
       const lastCell = document.createElement('td'); lastCell.textContent = formatDate(record.last);
-      row.append(itemCell, relatedCell, countCell, firstCell, lastCell); body.append(row);
+      row.append(relatedCell, countCell, firstCell, lastCell); body.append(row);
     });
   };
   columns.forEach(column => {
@@ -328,7 +358,7 @@ function render(scrobbles) {
   categoryControl.onchange = async () => {
     categoryControl.disabled = true;
     try {
-      await ScrobbleCategories.setCategory(username, entity, categoryControl.value);
+      await ScrobbleCategories.setCategory(username, entity, categoryControl.value, scrobbles);
       render(scrobbles);
     } catch (error) {
       alert(error.message);
@@ -353,7 +383,7 @@ function render(scrobbles) {
     const tracks = attachRelated(aggregate(selected, track => norm(titleOf(track)), titleOf), selected, track => norm(titleOf(track)), 'album')
       .map(record => ({ ...record, linkName: record.label, artist: name }));
     related.append(
-      buildRelatedTable('Albums by this artist', albums, 'album', 'No album tags found.', 'Album', 'Artist'),
+      buildRelatedTable('Albums by this artist', albums, 'album', 'No album tags found.', 'Album', 'Artist', selected),
       buildRelatedTable('Tracks by this artist', tracks, 'track', 'No tracks found.', 'Track', 'Album'),
     );
   } else if (type === 'album') {
@@ -461,6 +491,16 @@ async function load() {
   if (!username || !['artist', 'album', 'track'].includes(type) || !name) throw new Error('This detail link is incomplete. Open the item again from Listening Analysis.');
   const back = document.getElementById('backLink');
   back.href = `analysis.html?username=${encodeURIComponent(username)}`;
+  const directLinkButton = document.getElementById('copyDetailLink');
+  directLinkButton.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(location.href);
+      directLinkButton.textContent = 'Link copied';
+      setTimeout(() => { directLinkButton.textContent = 'Copy direct link'; }, 1800);
+    } catch {
+      directLinkButton.textContent = location.href;
+    }
+  });
 
   updateLoadingStep(2, 'Loading saved scrobbles…');
   await yieldToBrowser();
@@ -476,7 +516,7 @@ async function load() {
 
   updateLoadingStep(3, 'Loading saved categories and MusicBrainz classifications…');
   await yieldToBrowser();
-  try { await ScrobbleCategories.load(username); }
+  try { await ScrobbleCategories.load(username, { artist: type === 'artist' ? name : artist }); }
   catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
 
   updateLoadingStep(4, `Building listening history from ${scrobbles.length.toLocaleString()} scrobbles…`);

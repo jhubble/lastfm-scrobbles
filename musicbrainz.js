@@ -246,6 +246,7 @@ export function extractUniqueSongsFromScrobbles(scrobbles) {
       existing.scrobbleCount += 1;
       // If this scrobble is earlier than the recorded first scrobble, update it
       const scrobbleUts = Number(track.date.uts);
+      if (scrobbleUts > existing.lastScrobbledUts) existing.lastScrobbledUts = scrobbleUts;
       if (scrobbleUts < existing.firstScrobbledUts) {
         existing.firstScrobbledUts = scrobbleUts;
         existing.firstScrobbledDate = track.date?.['#text'] || new Date(scrobbleUts * 1000).toISOString();
@@ -261,6 +262,7 @@ export function extractUniqueSongsFromScrobbles(scrobbles) {
         trackMbid: track.mbid || null,
         artistMbid: track.artist?.mbid || null,
         firstScrobbledUts: scrobbleUts,
+        lastScrobbledUts: scrobbleUts,
         firstScrobbledDate: track.date?.['#text'] || new Date(scrobbleUts * 1000).toISOString(),
         firstScrobbledAlbum: normalizeAlbumTitle(track.album),
         firstScrobbledAlbumMbid: track.album?.mbid || null,
@@ -286,6 +288,96 @@ function normalizeAlbumTitle(album) {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return '';
+}
+
+function categoryOverrideKey(type, artist, name) {
+  return `${type}\u0000${String(artist || '').trim().toLocaleLowerCase()}\u0000${String(name || '').trim().toLocaleLowerCase()}`;
+}
+
+function lookupCategoryText(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function combineCategories(categories) {
+  if (categories.has('both') || (categories.has('music') && categories.has('audiobook'))) return 'both';
+  return categories.values().next().value || null;
+}
+
+function getMusicBrainzLookupCategories(scrobbles, uniqueSongs, manualOverrides, mbSongs) {
+  const songCategories = new Map();
+  const directTrackCategories = new Map();
+  const albumDates = new Map();
+
+  for (const track of scrobbles) {
+    if (!track.date?.uts) continue;
+    const artist = track.artist?.['#text'] || track.artist?.name || track.artist || 'Unknown Artist';
+    const title = track.name || 'Unknown Track';
+    const album = normalizeAlbumTitle(track.album);
+    const songKey = makeSongKey(artist, title);
+    const directTrackCategory = manualOverrides[categoryOverrideKey('track', artist, title)] || manualOverrides[`${lookupCategoryText(artist)}\u0000${lookupCategoryText(title)}`];
+    if (directTrackCategory) directTrackCategories.set(songKey, directTrackCategory);
+    else {
+      const inheritedCategory = (album && manualOverrides[categoryOverrideKey('album', artist, album)]) || manualOverrides[categoryOverrideKey('artist', '', artist)];
+      if (inheritedCategory) {
+        const categories = songCategories.get(songKey) || new Set();
+        categories.add(inheritedCategory);
+        songCategories.set(songKey, categories);
+      }
+    }
+
+    const uts = Number(track.date.uts);
+    if (album && Number.isFinite(uts)) {
+      const albumKey = `${lookupCategoryText(artist)}\u0000${lookupCategoryText(album)}`;
+      const dates = albumDates.get(albumKey) || [];
+      dates.push(uts);
+      albumDates.set(albumKey, dates);
+    }
+  }
+
+  const burstAlbums = new Set([...albumDates].filter(([, dates]) => {
+    if (dates.length < 8) return false;
+    let earliest = Infinity;
+    let latest = -Infinity;
+    for (const date of dates) { earliest = Math.min(earliest, date); latest = Math.max(latest, date); }
+    return latest - earliest <= 30 * 86400;
+  }).map(([key]) => key));
+  const playCounts = new Map(uniqueSongs.map(song => [song.songKey, song.scrobbleCount]));
+  const obviousAudiobookPattern = /\b(audiobook|audio book|unabridged|abridged|narrated by|chapter\s*\d+|audible)\b/i;
+  const audiobookPartPattern = /\bpart\s*\d+\b/i;
+  const autoCategories = new Map();
+
+  for (const track of scrobbles) {
+    if (!track.date?.uts) continue;
+    const artist = track.artist?.['#text'] || track.artist?.name || track.artist || 'Unknown Artist';
+    const title = track.name || 'Unknown Track';
+    const album = normalizeAlbumTitle(track.album);
+    const songKey = makeSongKey(artist, title);
+    const musicBrainzCategory = mbSongs?.[songKey]?.musicbrainzCategory;
+    let category = ['music', 'audiobook'].includes(musicBrainzCategory) ? musicBrainzCategory : null;
+    if (!category) {
+      if (obviousAudiobookPattern.test([artist, title, album].join(' '))) category = 'audiobook';
+      else {
+        const enoughPlays = (playCounts.get(songKey) || 0) >= 5;
+        const isTitleAlbumMatch = lookupCategoryText(title) && lookupCategoryText(title) === lookupCategoryText(album);
+        const albumKey = `${lookupCategoryText(artist)}\u0000${lookupCategoryText(album)}`;
+        if (enoughPlays && (isTitleAlbumMatch || burstAlbums.has(albumKey) || audiobookPartPattern.test(`${title} ${album}`))) category = 'audiobook';
+        else category = 'music';
+      }
+    }
+    const categories = autoCategories.get(songKey) || new Set();
+    categories.add(category);
+    autoCategories.set(songKey, categories);
+  }
+
+  const result = new Map();
+  for (const song of uniqueSongs) {
+    const manualCategory = directTrackCategories.has(song.songKey)
+      ? directTrackCategories.get(song.songKey)
+      : combineCategories(songCategories.get(song.songKey) || new Set());
+    const automaticCategory = combineCategories(autoCategories.get(song.songKey) || new Set());
+    result.set(song.songKey, { manualCategory, automaticCategory });
+  }
+  return result;
 }
 
 function isReleaseDateAfterScrobble(releaseDate, firstScrobbledUts) {
@@ -679,8 +771,16 @@ export async function startMusicBrainzJob(username, options = {}) {
     };
   }
 
+  const lookupCategories = getMusicBrainzLookupCategories(
+    scrobbles,
+    uniqueSongs,
+    options.manualCategories || {},
+    mbData.songs || {}
+  );
+
   // Determine pending songs (incremental: only look up songs not yet enriched)
   const pendingSongs = uniqueSongs.filter((s) => {
+    if (lookupCategories.get(s.songKey)?.manualCategory === 'audiobook') return false;
     const existing = mbData.songs[s.songKey];
     if (improbableOnly) return isImprobableSong(s, existing);
     if (!existing) return true;
@@ -688,6 +788,25 @@ export async function startMusicBrainzJob(username, options = {}) {
     if (existing.mbStatus === 'error') return true;
     return false;
   });
+  const lookupPriority = new Map(pendingSongs.map(song => {
+    const classification = lookupCategories.get(song.songKey) || {};
+    const effectiveCategory = classification.manualCategory || classification.automaticCategory;
+    let priority = 3;
+    if (effectiveCategory === 'music') {
+      const lastYear = new Date(song.lastScrobbledUts * 1000).getUTCFullYear();
+      if (lastYear > 2000) priority = 0;
+      else if (lastYear < 2000) priority = 1;
+    } else if (!classification.manualCategory && classification.automaticCategory === 'audiobook') {
+      priority = 2;
+    }
+    return [song.songKey, priority];
+  }));
+  pendingSongs.sort((a, b) =>
+      (lookupPriority.get(a.songKey) - lookupPriority.get(b.songKey)) ||
+      (b.scrobbleCount - a.scrobbleCount) ||
+      (a.firstScrobbledUts - b.firstScrobbledUts) ||
+      a.songKey.localeCompare(b.songKey)
+  );
 
   if (pendingSongs.length === 0) {
     return {
@@ -955,10 +1074,12 @@ export async function getMusicBrainzStatus(username) {
 }
 
 // Return cached MusicBrainz classifications for local scrobbles; this never makes network requests.
-export async function getMusicBrainzClassifications(username) {
+export async function getMusicBrainzClassifications(username, artist = '') {
   const key = username.toLowerCase().trim();
   const mbData = await loadMbData(key);
+  const artistPrefix = artist ? `${normalizeText(artist)}:::` : '';
   return Object.fromEntries(Object.entries(mbData.songs || {}).flatMap(([songKey, song]) => {
+    if (artistPrefix && !songKey.startsWith(artistPrefix)) return [];
     const classification = song?.musicbrainzCategory;
     return ['music', 'audiobook'].includes(classification) ? [[songKey, classification]] : [];
   }));
