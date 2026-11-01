@@ -80,7 +80,8 @@ export function normalizeText(str) {
   return (str || '')
     .normalize('NFKD')
     .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -904,6 +905,52 @@ export async function getMusicBrainzClassifications(username) {
   }));
 }
 
+// Return locally cached MusicBrainz details for tracks belonging to a detail-page entity.
+export async function getMusicBrainzEntityDetails(username, { type, name, artist = '' } = {}) {
+  const key = username.toLowerCase().trim();
+  const [mbData, scrobbles] = await Promise.all([loadMbData(key), loadUserScrobbles(key)]);
+  const targetName = normalizeText(name);
+  const targetArtist = normalizeText(artist);
+  const currentSongs = new Map(extractUniqueSongsFromScrobbles(scrobbles).map((song) => [song.songKey, song]));
+  const matchingSongKeys = new Set();
+
+  if (type === 'track') {
+    matchingSongKeys.add(makeSongKey(artist, name));
+  } else {
+    for (const track of scrobbles) {
+      const rawArtist = typeof track.artist === 'string' ? track.artist : track.artist?.['#text'] || track.artist?.name || '';
+      const trackArtist = normalizeText(rawArtist);
+      if (type === 'artist' && trackArtist === targetName) {
+        matchingSongKeys.add(makeSongKey(trackArtist, track.name));
+      } else if (type === 'album') {
+        const albumName = normalizeAlbumTitle(track.album);
+        if (trackArtist === targetArtist && normalizeText(albumName) === targetName) {
+          matchingSongKeys.add(makeSongKey(trackArtist, track.name));
+        }
+      }
+    }
+  }
+
+  return [...matchingSongKeys].map((songKey) => {
+    const entry = mbData.songs?.[songKey];
+    if (!entry) return null;
+    const currentSong = currentSongs.get(songKey);
+    return {
+      artist: currentSong?.artist || entry.artist || artist,
+      title: currentSong?.title || entry.title || name,
+      scrobbleCount: currentSong?.scrobbleCount || entry.scrobbleCount || 0,
+      mbStatus: entry.mbStatus || 'pending',
+      musicbrainzCategory: entry.musicbrainzCategory || 'unknown',
+      mbid: entry.mbid || entry.musicbrainzDetails?.recordingId || null,
+      musicbrainzUrl: entry.musicbrainzUrl || null,
+      earliestReleaseYear: entry.earliestReleaseYear || null,
+      earliestReleaseDate: entry.earliestReleaseDate || null,
+      earliestReleaseTitle: entry.earliestReleaseTitle || null,
+      musicbrainzDetails: entry.musicbrainzDetails || null,
+    };
+  }).filter(Boolean).sort((a, b) => b.scrobbleCount - a.scrobbleCount || a.title.localeCompare(b.title));
+}
+
 // Get paginated / filtered MusicBrainz songs data
 export async function getMusicBrainzData(username, params = {}) {
   const key = username.toLowerCase().trim();
@@ -973,32 +1020,34 @@ export async function getMusicBrainzData(username, params = {}) {
 
   // Apply sorting
   combined.sort((a, b) => {
-    switch (sortBy) {
-      case 'firstScrobbledDesc':
-        return (b.firstScrobbledUts || 0) - (a.firstScrobbledUts || 0);
-      case 'firstScrobbledAsc':
-        return (a.firstScrobbledUts || 0) - (b.firstScrobbledUts || 0);
-      case 'earliestYearAsc': {
-        const yA = a.earliestReleaseYear || 9999;
-        const yB = b.earliestReleaseYear || 9999;
-        return yA - yB;
-      }
-      case 'earliestYearDesc': {
-        const yA = a.earliestReleaseYear || 0;
-        const yB = b.earliestReleaseYear || 0;
-        return yB - yA;
-      }
-      case 'yearDiffDesc':
-        return (b.yearDifference || 0) - (a.yearDifference || 0);
-      case 'playCountDesc':
-        return (b.scrobbleCount || 0) - (a.scrobbleCount || 0);
-      case 'artistAsc':
-        return (a.artist || '').localeCompare(b.artist || '');
-      case 'titleAsc':
-        return (a.title || '').localeCompare(b.title || '');
-      default:
-        return (a.firstScrobbledUts || 0) - (b.firstScrobbledUts || 0);
-    }
+    const textSorts = {
+      title: [a.title, b.title],
+      artist: [a.artist, b.artist],
+      classification: [a.musicbrainzCategory, b.musicbrainzCategory],
+      mbStatus: [a.mbStatus, b.mbStatus],
+    };
+    const numberSorts = {
+      playCount: [a.scrobbleCount, b.scrobbleCount],
+      firstScrobbled: [a.firstScrobbledUts, b.firstScrobbledUts],
+      scrobbledRelease: [a.scrobbledReleaseYear || parseYear(a.firstScrobbledAlbum), b.scrobbledReleaseYear || parseYear(b.firstScrobbledAlbum)],
+      earliestYear: [a.earliestReleaseYear, b.earliestReleaseYear],
+      yearDiff: [a.yearDifference, b.yearDifference],
+    };
+    const match = sortBy.match(/^(title|artist|classification|mbStatus|playCount|firstScrobbled|scrobbledRelease|earliestYear|yearDiff)(Asc|Desc)$/);
+    if (!match) return (a.firstScrobbledUts || 0) - (b.firstScrobbledUts || 0);
+
+    const [, field, order] = match;
+    const values = textSorts[field] || numberSorts[field];
+    const [left, right] = values;
+    const direction = order === 'Desc' ? -1 : 1;
+    const leftMissing = left === null || left === undefined || left === '';
+    const rightMissing = right === null || right === undefined || right === '';
+    if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+    if (leftMissing) return 0;
+    const comparison = textSorts[field]
+      ? String(left).localeCompare(String(right), undefined, { sensitivity: 'base' })
+      : Number(left) - Number(right);
+    return comparison * direction;
   });
 
   const totalFiltered = combined.length;

@@ -8,6 +8,7 @@ import {
   getMusicBrainzStatus,
   getMusicBrainzData,
   getMusicBrainzClassifications,
+  getMusicBrainzEntityDetails,
   getMusicBrainzThrottle,
   setMusicBrainzThrottle,
   startMusicBrainzJob,
@@ -1031,6 +1032,19 @@ app.get('/api/musicbrainz/data/:username', async (req, res) => {
     return res.json(await getMusicBrainzData(req.params.username, req.query));
   } catch (err) {
     logger.error('MusicBrainzAPI', `Data lookup failed for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/musicbrainz/entity/:username', async (req, res) => {
+  const { type, name, artist = '' } = req.query;
+  if (!['artist', 'album', 'track'].includes(type) || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'Entity type and name are required.' });
+  }
+  try {
+    return res.json({ items: await getMusicBrainzEntityDetails(req.params.username, { type, name, artist }) });
+  } catch (err) {
+    logger.error('MusicBrainzAPI', `Entity detail lookup failed for ${req.params.username}: ${err.message}`, err);
     return res.status(500).json({ error: err.message });
   }
 });

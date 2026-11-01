@@ -17,7 +17,7 @@
   const albumIdentity = track => `${normalized(text(track.artist))}\u0000${normalized(text(track.album))}`;
   const entityKey = (type, artist, name) => `${type}\u0000${normalized(artist)}\u0000${normalized(name)}`;
   const musicBrainzKey = track => [text(track.artist), track.name].map(value => String(value || '')
-    .normalize('NFKD').toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()).join(':::');
+    .normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()).join(':::');
   const prepare = scrobbles => {
     const albums = new Map();
     for (const track of scrobbles) {

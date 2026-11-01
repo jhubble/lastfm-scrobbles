@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Last.fm Scrobble Dashboard</title>
   <style>
     body {
@@ -540,6 +541,18 @@
       border-bottom: 2px solid #3b2d54;
       white-space: nowrap;
     }
+    .mb-sort-button {
+      appearance: none;
+      background: none;
+      border: 0;
+      color: inherit;
+      font: inherit;
+      font-weight: inherit;
+      padding: 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    .mb-sort-button:hover { color: #fff; }
     .mb-table td {
       padding: 9px 12px;
       border-bottom: 1px solid #29292e;
@@ -602,6 +615,14 @@
       text-decoration: none;
     }
     .mb-link:hover {
+      text-decoration: underline;
+    }
+    .mb-song-detail-link {
+      color: #fff;
+      text-decoration: none;
+    }
+    .mb-song-detail-link:hover {
+      color: #d8b4fe;
       text-decoration: underline;
     }
   </style>
@@ -787,14 +808,24 @@
         </select>
 
         <select id="mbSort" class="mb-select" onchange="onMbSortChange(this.value)">
+          <option value="titleAsc">Song Title (A-Z)</option>
+          <option value="titleDesc">Song Title (Z-A)</option>
+          <option value="playCountAsc">Play Count (Least scrobbled)</option>
           <option value="firstScrobbledAsc">First Scrobbled (Earliest first)</option>
           <option value="firstScrobbledDesc">First Scrobbled (Latest first)</option>
+          <option value="scrobbledReleaseAsc">Scrobbled Release (Oldest first)</option>
+          <option value="scrobbledReleaseDesc">Scrobbled Release (Newest first)</option>
           <option value="earliestYearAsc">Earliest Release Year (Oldest first)</option>
           <option value="earliestYearDesc">Earliest Release Year (Newest first)</option>
+          <option value="yearDiffAsc">Year Difference (Smallest gap first)</option>
           <option value="yearDiffDesc">Year Difference (Largest gap first)</option>
           <option value="playCountDesc">Play Count (Most scrobbled)</option>
           <option value="artistAsc">Artist Name (A-Z)</option>
-          <option value="titleAsc">Song Title (A-Z)</option>
+          <option value="artistDesc">Artist Name (Z-A)</option>
+          <option value="classificationAsc">MB Classification (A-Z)</option>
+          <option value="classificationDesc">MB Classification (Z-A)</option>
+          <option value="mbStatusAsc">MusicBrainz Status (A-Z)</option>
+          <option value="mbStatusDesc">MusicBrainz Status (Z-A)</option>
         </select>
 
         <select id="mbLimit" class="mb-select" style="width: auto;" onchange="onMbLimitChange(this.value)">
@@ -809,13 +840,13 @@
         <table class="mb-table">
           <thead>
             <tr>
-              <th style="width: 21%;">Song &amp; Artist</th>
-              <th style="width: 8%;">Play Count</th>
-              <th style="width: 17%;">First Scrobbled</th>
-              <th style="width: 12%;">Scrobbled Release</th>
-              <th style="width: 15%;">Earliest Release Year</th>
-              <th style="width: 13%;">MB Classification</th>
-              <th style="width: 14%;">MusicBrainz Status</th>
+              <th style="width: 21%;" data-mb-sort-column="title"><button class="mb-sort-button" onclick="sortMusicBrainzBy('title')">Song &amp; Artist</button></th>
+              <th style="width: 8%;" data-mb-sort-column="playCount"><button class="mb-sort-button" onclick="sortMusicBrainzBy('playCount')">Play Count</button></th>
+              <th style="width: 17%;" data-mb-sort-column="firstScrobbled"><button class="mb-sort-button" onclick="sortMusicBrainzBy('firstScrobbled')">First Scrobbled</button></th>
+              <th style="width: 12%;" data-mb-sort-column="scrobbledRelease"><button class="mb-sort-button" onclick="sortMusicBrainzBy('scrobbledRelease')">Scrobbled Release</button></th>
+              <th style="width: 15%;" data-mb-sort-column="earliestYear"><button class="mb-sort-button" onclick="sortMusicBrainzBy('earliestYear')">Earliest Release Year</button></th>
+              <th style="width: 13%;" data-mb-sort-column="classification"><button class="mb-sort-button" onclick="sortMusicBrainzBy('classification')">MB Classification</button></th>
+              <th style="width: 14%;" data-mb-sort-column="mbStatus"><button class="mb-sort-button" onclick="sortMusicBrainzBy('mbStatus')">MusicBrainz Status</button></th>
             </tr>
           </thead>
           <tbody id="mbTableBody">

@@ -840,9 +840,17 @@ function renderMusicBrainzRows(items) {
     const tr = document.createElement('tr');
 
     // 1. Song & Artist
+    const detailQuery = new URLSearchParams({
+      username: document.getElementById('username')?.value.trim() || '',
+      type: 'track',
+      name: item.title || '',
+      artist: item.artist || '',
+      category: 'all',
+    });
+    const detailHref = `detail.html?${detailQuery.toString()}`;
     const songCell = `
       <div>
-        <strong style="color: #fff;">${escapeHtml(item.title)}</strong>
+        <a class="mb-song-detail-link" href="${escapeHtml(detailHref)}" title="Open listening details">${escapeHtml(item.title)}</a>
         <div style="color: #a8a8b3; font-size: 12px; margin-top: 2px;">${escapeHtml(item.artist)}</div>
       </div>
     `;
@@ -974,8 +982,35 @@ function onMbFilterChange(val) {
 
 function onMbSortChange(val) {
   mbSortValue = val;
+  updateMbSortIndicators();
   loadMusicBrainzTable(1);
 }
+
+function updateMbSortIndicators() {
+  const match = mbSortValue.match(/^(title|playCount|firstScrobbled|scrobbledRelease|earliestYear|classification|mbStatus)(Asc|Desc)$/);
+  const sortColumn = match?.[1];
+  const direction = match?.[2];
+  document.querySelectorAll('[data-mb-sort-column]').forEach((th) => {
+    const button = th.querySelector('.mb-sort-button');
+    if (!button) return;
+    if (!button.dataset.baseLabel) button.dataset.baseLabel = button.textContent.trim();
+    const active = th.dataset.mbSortColumn === sortColumn;
+    th.setAttribute('aria-sort', active ? (direction === 'Asc' ? 'ascending' : 'descending') : 'none');
+    button.textContent = `${button.dataset.baseLabel}${active ? (direction === 'Asc' ? ' ↑' : ' ↓') : ' ↕'}`;
+  });
+}
+
+function sortMusicBrainzBy(column) {
+  const current = mbSortValue.match(/^(title|playCount|firstScrobbled|scrobbledRelease|earliestYear|classification|mbStatus)(Asc|Desc)$/);
+  const direction = current?.[1] === column && current[2] === 'Asc' ? 'Desc' : 'Asc';
+  mbSortValue = `${column}${direction}`;
+  const select = document.getElementById('mbSort');
+  if (select) select.value = mbSortValue;
+  updateMbSortIndicators();
+  loadMusicBrainzTable(1);
+}
+
+updateMbSortIndicators();
 
 function onMbLimitChange(val) {
   mbLimitValue = parseInt(val, 10) || 50;

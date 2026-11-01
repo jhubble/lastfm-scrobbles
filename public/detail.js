@@ -272,6 +272,74 @@ function render(scrobbles) {
   document.getElementById('loading').hidden = true;
 }
 
+async function loadMusicBrainzEntityDetails() {
+  const params = new URLSearchParams({ type, name, artist });
+  try {
+    const response = await fetch(`/api/musicbrainz/entity/${encodeURIComponent(username)}?${params}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    if (!Array.isArray(data.items) || data.items.length === 0) return;
+
+    const section = document.getElementById('musicbrainzDetails');
+    const content = document.getElementById('musicbrainzContent');
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const heading = document.createElement('tr');
+    for (const label of ['Track', 'Classification', 'Earliest release', 'Release groups', 'Tags and genres', 'MusicBrainz']) {
+      const th = document.createElement('th'); th.textContent = label; heading.append(th);
+    }
+    thead.append(heading); table.append(thead);
+    const tbody = document.createElement('tbody');
+
+    for (const item of data.items) {
+      const row = document.createElement('tr');
+      const trackCell = document.createElement('td');
+      const trackLink = document.createElement('a');
+      trackLink.href = detailUrl('track', item.title, item.artist);
+      trackLink.textContent = item.title;
+      trackCell.append(trackLink);
+      const credits = (item.musicbrainzDetails?.artistCredits || []).map(credit => credit.name).filter(Boolean).join(', ');
+      const disambiguation = item.musicbrainzDetails?.disambiguation;
+      if (credits || disambiguation) {
+        const meta = document.createElement('div'); meta.className = 'muted';
+        meta.style.fontSize = '12px';
+        meta.textContent = [credits, disambiguation].filter(Boolean).join(' · ');
+        trackCell.append(meta);
+      }
+      row.append(trackCell);
+
+      const category = item.musicbrainzCategory === 'audiobook' ? 'Audiobook' : item.musicbrainzCategory === 'music' ? 'Music' : 'Unknown';
+      const year = item.earliestReleaseYear || item.earliestReleaseDate;
+      const earliest = [item.earliestReleaseTitle, year].filter(Boolean).join(' · ') || '—';
+      const groups = (item.musicbrainzDetails?.releaseGroups || []).map(group => {
+        const types = [group.primaryType, ...(group.secondaryTypes || [])].filter(Boolean).join(', ');
+        return [group.title, group.firstReleaseDate, types].filter(Boolean).join(' · ');
+      });
+      const tags = (item.musicbrainzDetails?.tags || []).map(tag => tag.name).filter(Boolean);
+      const genres = (item.musicbrainzDetails?.genres || []).map(genre => genre.name).filter(Boolean);
+      const values = [category, earliest, groups.join(' / ') || '—', [...new Set([...tags, ...genres])].join(', ') || '—'];
+      for (const value of values) {
+        const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+      }
+
+      const linkCell = document.createElement('td');
+      const mbid = item.musicbrainzUrl || (item.mbid ? `https://musicbrainz.org/recording/${encodeURIComponent(item.mbid)}` : '');
+      if (mbid) {
+        const link = document.createElement('a'); link.href = mbid; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open ↗';
+        linkCell.append(link);
+      } else linkCell.textContent = item.mbStatus || '—';
+      row.append(linkCell);
+      tbody.append(row);
+    }
+
+    table.append(tbody);
+    content.replaceChildren(table);
+    section.hidden = false;
+  } catch (error) {
+    console.warn('Could not load cached MusicBrainz details:', error.message);
+  }
+}
+
 async function load() {
   if (!username || !['artist', 'album', 'track'].includes(type) || !name) throw new Error('This detail link is incomplete. Open the item again from Listening Analysis.');
   const back = document.getElementById('backLink');
@@ -289,6 +357,7 @@ async function load() {
   catch (error) { console.warn('Could not load saved audiobook categories:', error.message); }
   ScrobbleCategories.prepare(scrobbles);
   render(scrobbles);
+  loadMusicBrainzEntityDetails();
 }
 
 load().catch(error => {
