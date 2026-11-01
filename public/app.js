@@ -630,6 +630,7 @@ let mbSortValue = 'firstScrobbledAsc';
 let mbLimitValue = 50;
 let mbSectionVisible = false;
 let mbViewLoadId = 0;
+let mbImprobableCount = 0;
 
 function setMbStatus(msg) {
   const el = document.getElementById('mbStatus');
@@ -640,6 +641,7 @@ function setMbButtonsBusy(isBusy) {
   const btnMbStart = document.getElementById('btnMbStart');
   const btnMbPause = document.getElementById('btnMbPause');
   const btnMbRestart = document.getElementById('btnMbRestart');
+  const btnMbRefreshImprobable = document.getElementById('btnMbRefreshImprobable');
 
   if (btnMbStart) {
     btnMbStart.disabled = isBusy;
@@ -650,6 +652,9 @@ function setMbButtonsBusy(isBusy) {
   }
   if (btnMbRestart) {
     btnMbRestart.disabled = isBusy;
+  }
+  if (btnMbRefreshImprobable) {
+    btnMbRefreshImprobable.disabled = isBusy || mbImprobableCount === 0;
   }
 }
 
@@ -697,6 +702,7 @@ async function fetchMusicBrainzStatus() {
     const stEnriched = document.getElementById('mbStatEnriched');
     const stOldest = document.getElementById('mbStatOldestYear');
     const stLater = document.getElementById('mbStatLaterCount');
+    const stImprobable = document.getElementById('mbStatImprobable');
     const stAudiobooks = document.getElementById('mbStatAudiobooks');
     const stClassification = document.getElementById('mbStatClassification');
     const stToLookup = document.getElementById('mbStatToLookup');
@@ -709,6 +715,14 @@ async function fetchMusicBrainzStatus() {
     }
     if (stOldest) stOldest.innerText = data.stats.oldestReleaseYear || '-';
     if (stLater) stLater.innerText = (data.stats.laterReleaseCount || 0).toLocaleString();
+    mbImprobableCount = data.stats.improbableCount || 0;
+    if (stImprobable) stImprobable.innerText = mbImprobableCount.toLocaleString();
+    const btnRefreshImprobable = document.getElementById('btnMbRefreshImprobable');
+    if (btnRefreshImprobable) {
+      btnRefreshImprobable.title = mbImprobableCount
+        ? `Refresh ${mbImprobableCount.toLocaleString()} MusicBrainz result(s) dated after the first scrobble`
+        : 'No improbable release dates found';
+    }
     if (stAudiobooks) stAudiobooks.innerText = (data.stats.audiobookCount || 0).toLocaleString();
     if (stClassification) stClassification.innerText = `${(data.stats.musicCount || 0).toLocaleString()} music · ${(data.stats.unknownClassificationCount || 0).toLocaleString()} unknown`;
     const hasResumableQueue = data.isRunning || data.status === 'paused';
@@ -897,6 +911,9 @@ function renderMusicBrainzRows(items) {
       earliestCell = `<span style="color: #71717a;">Pending...</span>`;
     } else {
       earliestCell = `<span style="color: #71717a;">Unknown</span>`;
+    }
+    if (item.isImprobable) {
+      earliestCell = `<div>${earliestCell}<div style="font-size: 11px; color: #fb7185; margin-top: 3px;">⚠ After first scrobble</div></div>`;
     }
 
     // 6. MusicBrainz Status & Link
@@ -1150,7 +1167,7 @@ async function startMusicBrainz(options = {}) {
   if (!username) return alert('Please enter a Last.fm username');
 
   const restart = Boolean(options.restart);
-  setMbStatus(restart ? 'Starting full fresh enrichment...' : 'Starting enrichment...');
+  setMbStatus(restart ? 'Starting full fresh enrichment...' : options.improbableOnly ? 'Refreshing improbable release dates...' : 'Starting enrichment...');
   setMbButtonsBusy(true);
 
   const progressBox = document.getElementById('mbProgressBox');
@@ -1160,17 +1177,26 @@ async function startMusicBrainz(options = {}) {
     const res = await fetch('/api/musicbrainz/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, restart }),
+      body: JSON.stringify({ username, restart, improbableOnly: Boolean(options.improbableOnly) }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
     setMbStatus(data.message || 'Enrichment started');
+    if (data.noItems) {
+      setMbButtonsBusy(false);
+      await refreshMusicBrainzView();
+      return;
+    }
     connectMusicBrainzStream(username);
   } catch (err) {
     setMbStatus(`Error starting enrichment: ${err.message}`);
     setMbButtonsBusy(false);
   }
+}
+
+async function refreshImprobableMusicBrainz() {
+  await startMusicBrainz({ improbableOnly: true });
 }
 
 async function pauseMusicBrainz() {

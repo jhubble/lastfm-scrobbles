@@ -1051,15 +1051,18 @@ app.get('/api/musicbrainz/entity/:username', async (req, res) => {
 
 // API: Start or resume MusicBrainz enrichment.
 app.post('/api/musicbrainz/start', async (req, res) => {
-  const { username, restart = false } = req.body || {};
+  const { username, restart = false, improbableOnly = false } = req.body || {};
   if (typeof username !== 'string' || !username.trim()) {
     return res.status(400).json({ error: 'A username is required to start MusicBrainz enrichment.' });
   }
 
   try {
-    const result = await startMusicBrainzJob(username.trim(), { restart: Boolean(restart) });
+    const result = await startMusicBrainzJob(username.trim(), {
+      restart: Boolean(restart),
+      improbableOnly: Boolean(improbableOnly),
+    });
     return res.json({
-      message: result.alreadyRunning ? 'MusicBrainz enrichment is already running.' : 'MusicBrainz enrichment started.',
+      message: result.message || (result.alreadyRunning ? 'MusicBrainz enrichment is already running.' : 'MusicBrainz enrichment started.'),
       ...result,
     });
   } catch (err) {

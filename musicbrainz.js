@@ -288,6 +288,29 @@ function normalizeAlbumTitle(album) {
   return '';
 }
 
+function isReleaseDateAfterScrobble(releaseDate, firstScrobbledUts) {
+  const match = String(releaseDate || '').match(/^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/);
+  const uts = Number(firstScrobbledUts);
+  if (!match || !Number.isFinite(uts)) return false;
+
+  const scrobbleDate = new Date(uts * 1000);
+  const releaseParts = [Number(match[1]), match[2] ? Number(match[2]) : null, match[3] ? Number(match[3]) : null];
+  const scrobbleParts = [scrobbleDate.getUTCFullYear(), scrobbleDate.getUTCMonth() + 1, scrobbleDate.getUTCDate()];
+  for (let i = 0; i < releaseParts.length; i++) {
+    if (releaseParts[i] === null) return false;
+    if (releaseParts[i] !== scrobbleParts[i]) return releaseParts[i] > scrobbleParts[i];
+  }
+  return false;
+}
+
+function isImprobableSong(song, enrichment) {
+  if (!enrichment || enrichment.mbStatus !== 'found') return false;
+  return isReleaseDateAfterScrobble(
+    enrichment.earliestReleaseDate || enrichment.earliestReleaseYear,
+    song.firstScrobbledUts
+  );
+}
+
 // Analyze recording to find the earliest date and match against the scrobbled album
 export function parseRecordingDetails(recording, scrobbledAlbum, scrobbledTrackTitle) {
   let earliestDate = recording['first-release-date'] || null;
@@ -624,6 +647,7 @@ export function removeMbSseClient(username, res) {
 export async function startMusicBrainzJob(username, options = {}) {
   const key = username.toLowerCase().trim();
   const restart = Boolean(options.restart);
+  const improbableOnly = Boolean(options.improbableOnly) && !restart;
 
   if (activeJobs.has(key)) {
     logger.warn('MusicBrainzJob', `Job already running for user "${key}"`);
@@ -658,11 +682,19 @@ export async function startMusicBrainzJob(username, options = {}) {
   // Determine pending songs (incremental: only look up songs not yet enriched)
   const pendingSongs = uniqueSongs.filter((s) => {
     const existing = mbData.songs[s.songKey];
+    if (improbableOnly) return isImprobableSong(s, existing);
     if (!existing) return true;
     if (existing.musicbrainzSchemaVersion !== 2) return true;
     if (existing.mbStatus === 'error') return true;
     return false;
   });
+
+  if (pendingSongs.length === 0) {
+    return {
+      noItems: true,
+      message: improbableOnly ? 'No improbable release dates need refreshing.' : 'No MusicBrainz items need looking up.',
+    };
+  }
 
   const abortController = new AbortController();
   const jobState = {
@@ -888,6 +920,7 @@ export async function getMusicBrainzStatus(username) {
   const audiobookCount = uniqueSongs.filter((s) => mbData.songs?.[s.songKey]?.musicbrainzCategory === 'audiobook').length;
   const musicCount = uniqueSongs.filter((s) => mbData.songs?.[s.songKey]?.musicbrainzCategory === 'music').length;
   const unknownClassificationCount = Math.max(0, uniqueSongs.length - audiobookCount - musicCount);
+  const improbableCount = uniqueSongs.filter((song) => isImprobableSong(song, mbData.songs?.[song.songKey])).length;
 
   // Find oldest release year discovered
   const years = songsArray
@@ -914,6 +947,7 @@ export async function getMusicBrainzStatus(username) {
       audiobookCount,
       musicCount,
       unknownClassificationCount,
+      improbableCount,
       oldestReleaseYear: oldestYear,
       percentComplete: totalUnique > 0 ? Math.min(100, Math.round((processed / totalUnique) * 100)) : 0,
     },
@@ -998,12 +1032,14 @@ export async function getMusicBrainzData(username, params = {}) {
         ...us,
         ...enriched,
         firstScrobbledAlbum: normalizeAlbumTitle(enriched.firstScrobbledAlbum) || us.firstScrobbledAlbum,
+        isImprobable: isImprobableSong(us, enriched),
         musicbrainzCategory: enriched.musicbrainzCategory || 'unknown',
       };
     }
     return {
       ...us,
       mbStatus: 'pending',
+      isImprobable: false,
       musicbrainzCategory: 'unknown',
       earliestReleaseYear: null,
       earliestReleaseDate: null,
@@ -1042,6 +1078,8 @@ export async function getMusicBrainzData(username, params = {}) {
     combined = combined.filter((s) => s.musicbrainzCategory === 'audiobook');
   } else if (filter === 'classification_unknown') {
     combined = combined.filter((s) => !['music', 'audiobook'].includes(s.musicbrainzCategory));
+  } else if (filter === 'improbable') {
+    combined = combined.filter((s) => s.isImprobable);
   }
 
   // Apply sorting

@@ -783,6 +783,7 @@
         <div class="mb-stat-box">Remaining<div class="stat-val" id="mbStatRemaining">-</div></div>
         <div class="mb-stat-box">Earliest Year in Library<div class="stat-val" style="color: #c084fc;" id="mbStatOldestYear">-</div></div>
         <div class="mb-stat-box">Later Works / Remasters<div class="stat-val" style="color: #f59e0b;" id="mbStatLaterCount">-</div></div>
+        <div class="mb-stat-box">Improbable Dates<div class="stat-val" style="color: #fb7185;" id="mbStatImprobable">-</div></div>
         <div class="mb-stat-box">Audiobooks<div class="stat-val" style="color: #c084fc;" id="mbStatAudiobooks">-</div></div>
         <div class="mb-stat-box">Music / Unknown<div class="stat-val" id="mbStatClassification">-</div></div>
       </div>
@@ -792,6 +793,7 @@
         <button id="btnMbStart" class="btn-musicbrainz" onclick="startMusicBrainz()">▶ Start / Resume Enrichment</button>
         <button id="btnMbPause" class="btn-secondary" onclick="pauseMusicBrainz()" style="display: none;">■ Stop &amp; Save</button>
         <button id="btnMbRestart" class="btn-warning btn-small" onclick="restartMusicBrainz()" style="display: none;">Restart All</button>
+        <button id="btnMbRefreshImprobable" class="btn-warning btn-small" onclick="refreshImprobableMusicBrainz()" disabled title="No improbable release dates found">↻ Refresh Improbable</button>
         <button class="btn-secondary btn-small" onclick="refreshMusicBrainzView()">↻ Refresh View</button>
         <label for="mbThrottle" style="margin-left: 8px;">Request interval</label>
         <select id="mbThrottle" class="mb-select" onchange="updateMusicBrainzThrottle(this.value)">
@@ -827,6 +829,7 @@
         <select id="mbFilter" class="mb-select" onchange="onMbFilterChange(this.value)">
           <option value="all">All Unique Songs</option>
           <option value="later_releases">⚠️ Later Works &amp; Remasters Only (Earliest &lt; Scrobbled)</option>
+          <option value="improbable">⚠️ Improbable Dates (Earliest Release After First Scrobble)</option>
           <option value="found">✓ Enriched in MusicBrainz</option>
           <option value="pending">⏳ Pending Lookups</option>
           <option value="not_found">✕ Not Found in MusicBrainz</option>
