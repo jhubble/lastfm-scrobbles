@@ -1,5 +1,6 @@
 const params = new URLSearchParams(location.search);
 const username = params.get('username') || '';
+// Link back to similarity page (fixed string interpolation)
 document.getElementById('similarityLink').href = `similarity.html?username=${encodeURIComponent(username)}`;
 let scrobbles = [];
 let itemLimit = 25;
@@ -83,8 +84,9 @@ function finishRankingCounts(counts) {
 }
 
 function detailHref(type, name, artist = '') {
-  const detailCategory = ['automatic_audiobook', 'manual_audiobook'].includes(categoryFilter) ? 'audiobook' : categoryFilter;
-  const query = new URLSearchParams({ username, type, name, artist, category: detailCategory });
+  // Build link to detail page without filter criteria.
+  // Category filter is intentionally omitted to show all data.
+  const query = new URLSearchParams({ username, type, name, artist });
   return `detail.html?${query.toString()}`;
 }
 
@@ -105,8 +107,14 @@ function renderInsights(containerId, groups, emptyMessage) {
         const row = document.createElement('li');
         const name = document.createElement('a'); name.className = 'name';
         name.href = detailHref(type === 'artists' ? 'artist' : type === 'albums' ? 'album' : 'track', item.name, item.artist);
+        name.target = '_blank';
         name.textContent = type === 'artists' ? item.name : `${item.name} — ${item.artist}`;
-        const plays = document.createElement('span'); plays.className = 'plays'; plays.textContent = `${item.count} plays`;
+        const plays = document.createElement('a');
+        plays.className = 'plays';
+        // Link to detail page showing all scrobbles for this item.
+        plays.href = detailHref(type === 'artists' ? 'artist' : type === 'albums' ? 'album' : 'track', item.name, item.artist);
+        plays.target = '_blank';
+        plays.textContent = `${item.count} plays`;
         row.append(name, plays); list.append(row);
       });
     }
@@ -116,9 +124,7 @@ function renderInsights(containerId, groups, emptyMessage) {
 
 async function updateInsights(categoryScopedScrobbles, updateId) {
   const types = viewMode === 'all' ? ['tracks', 'albums', 'artists'] : [viewMode];
-  const counts = Object.fromEntries(types.map(type => [type, {
-    current: new Map(), history: new Map(), previous: new Map(),
-  }]));
+  const counts = Object.fromEntries(types.map(type => [type, { current: new Map(), history: new Map(), previous: new Map() }]));
   const currentStart = activeRange.start.getTime();
   const currentEnd = activeRange.end.getTime();
   const duration = currentEnd - currentStart + 1;
@@ -196,6 +202,7 @@ function renderList(id, entries) {
     const row = document.createElement('li');
     const name = document.createElement('a'); name.className = 'name';
     name.href = detailHref(id === 'tracks' ? 'track' : id === 'albums' ? 'album' : 'artist', item.primary, item.secondary || '');
+    name.target = '_blank';
     name.textContent = item.primary;
     if (item.secondary) {
       const detail = document.createElement('span'); detail.className = 'muted';
@@ -282,12 +289,11 @@ async function updateAnalysis() {
     }
     if (updateId !== analysisUpdateId) return;
     if (end < scrobbles.length) {
-      setAnalysisLoading(`Filtering scrobbles and counting rankings… ${end.toLocaleString()} of ${scrobbles.length.toLocaleString()}`);
+      setAnalysisLoading(`Filtering scrobbles and counting rankings… ${end.toLocaleString()} of ${scrobbles.length.toLocaleString()} scrobbles`);
       await nextAnalysisFrame();
       if (updateId !== analysisUpdateId) return;
     }
   }
-
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
   const rankings = finishRankingCounts(rankingCounts);
   document.querySelectorAll('[data-ranking]').forEach(section => { section.hidden = viewMode !== 'all' && section.dataset.ranking !== viewMode; });
@@ -328,22 +334,15 @@ document.getElementById('applyBulkCategory').addEventListener('click', async eve
     return classification.source === 'automatic';
   });
 
-  if (category === 'auto_only') {
-    entitiesToUpdate = filterAuto(entities);
-    category = 'auto';
-  } else if (category === 'auto_music') {
-    entitiesToUpdate = filterAuto(entities);
-    category = 'music';
-  } else if (category === 'auto_audiobook') {
-    entitiesToUpdate = filterAuto(entities);
-    category = 'audiobook';
-  }
+  if (category === 'auto_only') { entitiesToUpdate = filterAuto(entities); category = 'auto'; }
+  else if (category === 'auto_music') { entitiesToUpdate = filterAuto(entities); category = 'music'; }
+  else if (category === 'auto_audiobook') { entitiesToUpdate = filterAuto(entities); category = 'audiobook'; }
 
   if (!entitiesToUpdate.length) {
     return alert('No automatically‑classified items matched the selected bulk operation.');
   }
 
-  if (!confirm(`Apply ${category === 'auto' ? 'Automatic' : category} classification to ${entitiesToUpdate.length} visible results?`)) return;
+  if (!confirm(`Apply ${category === 'auto' ? 'Automatic' : category} classification to ${entitiesToUpdate.length} items?`)) return;
   button.disabled = true;
   try {
     await ScrobbleCategories.setCategories(username, entitiesToUpdate, category);
@@ -386,9 +385,7 @@ function buildShortcuts() {
   const quick = document.getElementById('quickLinks');
   const presets = [['Last 30 days', 30], ['Last 90 days', 90], ['Last week', 7], ['Last 24 hours', 1], ['Last year', 365]];
   for (const [label, days] of presets) addShortcut(quick, label, () => setRollingRange(days, label));
-  addShortcut(quick, 'All time', () => {
-    activeRange = { start: new Date(0), end: new Date(), label: 'All time' }; updateAnalysis();
-  });
+  addShortcut(quick, 'All time', () => { activeRange = { start: new Date(0), end: new Date(), label: 'All time' }; updateAnalysis(); });
 
   const monthSet = new Set();
   const yearSet = new Set();
@@ -409,7 +406,8 @@ function buildShortcuts() {
       const label = date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
       addShortcut(monthWrap, label, () => {
         activeRange = { start: new Date(year, month - 1, 1), end: new Date(year, month, 1), label };
-        activeRange.end.setMilliseconds(-1); updateAnalysis();
+        activeRange.end.setMilliseconds(-1);
+        updateAnalysis();
       });
     });
   }
@@ -418,7 +416,8 @@ function buildShortcuts() {
     const heading = document.createElement('strong'); heading.textContent = 'Years'; yearWrap.append(heading);
     years.forEach(year => addShortcut(yearWrap, year, () => {
       activeRange = { start: new Date(Number(year), 0, 1), end: new Date(Number(year) + 1, 0, 1), label: year };
-      activeRange.end.setMilliseconds(-1); updateAnalysis();
+      activeRange.end.setMilliseconds(-1);
+      updateAnalysis();
     }));
   }
 }
