@@ -3,6 +3,7 @@ const username = params.get('username') || '';
 // Link back to similarity page (fixed string interpolation)
 document.getElementById('similarityLink').href = `similarity.html?username=${encodeURIComponent(username)}`;
 let scrobbles = [];
+let visibleScrobbles = [];
 let itemLimit = 25;
 let categoryFilter = 'all';
 let viewMode = 'all';
@@ -109,18 +110,69 @@ function renderInsights(containerId, groups, emptyMessage) {
         name.href = detailHref(type === 'artists' ? 'artist' : type === 'albums' ? 'album' : 'track', item.name, item.artist);
         name.target = '_blank';
         name.textContent = type === 'artists' ? item.name : `${item.name} — ${item.artist}`;
-        const plays = document.createElement('a');
+        const plays = document.createElement('button');
+        plays.type = 'button';
         plays.className = 'plays';
-        // Link to detail page showing all scrobbles for this item.
-        plays.href = detailHref(type === 'artists' ? 'artist' : type === 'albums' ? 'album' : 'track', item.name, item.artist);
-        plays.target = '_blank';
         plays.textContent = `${item.count} plays`;
-        row.append(name, plays); list.append(row);
+        // Store data for toggling
+        plays.dataset.type = type;
+        plays.dataset.name = item.name;
+        plays.dataset.artist = item.artist || '';
+        plays.addEventListener('click', () => toggleScrobbleList(plays, item, type));
+        row.append(name, plays);
+        list.append(row);
       });
     }
     section.append(list); container.append(section);
   }
 }
+
+function toggleScrobbleList(button, item, type) {
+  // Find existing inline list sibling
+  const existing = button.parentElement.querySelector('.inline-scrobble-list');
+  if (existing) {
+    existing.remove();
+    button.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  // Create list container
+  const listDiv = document.createElement('div');
+  listDiv.className = 'inline-scrobble-list';
+  listDiv.style.marginTop = '0.5em';
+  const ul = document.createElement('ul');
+  // Filter scrobbles matching the item
+  const matches = scrobbles.filter(s => {
+    const rawArtist = textOf(s.artist, 'Unknown artist');
+    const artist = ScrobbleVariants.resolveArtist(rawArtist);
+    if (type === 'artists') return artist === item.name;
+    const title = ScrobbleVariants.resolveTrack(rawArtist, textOf(s.name, ''));
+    const album = ScrobbleVariants.resolveAlbum(rawArtist, textOf(s.album));
+    if (type === 'tracks') return `${artist}\u0000${title}` === `${artist}\u0000${item.name}`;
+    if (type === 'albums') return album && `${artist}\u0000${album}` === `${artist}\u0000${item.name}`;
+    return false;
+  });
+  matches.forEach(s => {
+    const li = document.createElement('li');
+    const date = scrobbleDate(s);
+    const dateStr = date ? date.toLocaleDateString() : '';
+    const rawArtist = textOf(s.artist, '');
+    const artist = ScrobbleVariants.resolveArtist(rawArtist);
+    const title = ScrobbleVariants.resolveTrack(rawArtist, textOf(s.name, ''));
+    const album = ScrobbleVariants.resolveAlbum(rawArtist, textOf(s.album));
+    li.textContent = `${dateStr}: ${title}${album ? ' — ' + album : ''} (${artist})`;
+    ul.append(li);
+  });
+  if (!matches.length) {
+    const empty = document.createElement('p');
+    empty.textContent = 'No scrobbles found.';
+    listDiv.append(empty);
+  } else {
+    listDiv.append(ul);
+  }
+  button.parentElement.append(listDiv);
+  button.setAttribute('aria-expanded', 'true');
+}
+
 
 async function updateInsights(categoryScopedScrobbles, updateId) {
   const types = viewMode === 'all' ? ['tracks', 'albums', 'artists'] : [viewMode];
@@ -208,8 +260,12 @@ function renderList(id, entries) {
       const detail = document.createElement('span'); detail.className = 'muted';
       detail.textContent = ` — ${item.secondary}`; name.append(detail);
     }
-    const plays = document.createElement('span'); plays.className = 'plays';
-    plays.textContent = `${item.count} ${item.count === 1 ? 'play' : 'plays'}`;
+    const plays = document.createElement('button');
+    plays.type = 'button';
+    plays.className = 'plays';
+    plays.textContent = `${item.count.toLocaleString()} ${item.count === 1 ? 'play' : 'plays'}`;
+    plays.setAttribute('aria-expanded', 'false');
+    plays.addEventListener('click', () => toggleRankingScrobbles(plays, id, item));
     row.append(name, plays); list.append(row);
     const entityType = id === 'tracks' ? 'track' : id === 'albums' ? 'album' : 'artist';
     const entity = { type: entityType, artist: id === 'artists' ? '' : item.secondary || '', name: item.primary };
@@ -254,6 +310,57 @@ function renderList(id, entries) {
   }
 }
 
+function toggleRankingScrobbles(button, type, item) {
+  const existing = button.parentElement.querySelector('.inline-scrobble-list');
+  if (existing) {
+    existing.remove();
+    button.setAttribute('aria-expanded', 'false');
+    button.textContent = `${item.count.toLocaleString()} ${item.count === 1 ? 'play' : 'plays'}`;
+    return;
+  }
+  const artistKey = ScrobbleVariants.resolveArtist(item.secondary || item.primary);
+  const matches = visibleScrobbles.filter(track => {
+    const rawArtist = textOf(track.artist, 'Unknown artist');
+    const artist = ScrobbleVariants.resolveArtist(rawArtist);
+    if (type === 'artists') return artist === artistKey;
+    if (artist !== ScrobbleVariants.resolveArtist(item.secondary || '')) return false;
+    if (type === 'tracks') return ScrobbleVariants.resolveTrack(rawArtist, textOf(track.name)) === item.primary;
+    return ScrobbleVariants.resolveAlbum(rawArtist, textOf(track.album)) === item.primary;
+  }).reverse();
+  const panel = document.createElement('div'); panel.className = 'inline-scrobble-list';
+  renderScrobbleBatch(panel, matches);
+  button.parentElement.append(panel);
+  button.setAttribute('aria-expanded', 'true');
+  button.textContent = `Hide ${item.count.toLocaleString()} ${item.count === 1 ? 'play' : 'plays'}`;
+}
+
+function renderScrobbleBatch(container, tracks, start = 0) {
+  const end = Math.min(start + 50, tracks.length);
+  let table = container.querySelector('table');
+  if (!table) {
+    table = document.createElement('table');
+    const head = document.createElement('thead');
+    const row = document.createElement('tr');
+    for (const label of ['Played at', 'Track', 'Artist', 'Album']) { const th = document.createElement('th'); th.textContent = label; row.append(th); }
+    head.append(row); table.append(head, document.createElement('tbody')); container.append(table);
+  }
+  const body = table.tBodies[0];
+  for (const track of tracks.slice(start, end)) {
+    const row = document.createElement('tr');
+    const uts = Number(track?.date?.uts);
+    const cells = [Number.isFinite(uts) ? new Date(uts * 1000).toLocaleString() : 'Date unavailable', textOf(track.name, 'Unknown track'), textOf(track.artist, 'Unknown artist'), textOf(track.album, '—')];
+    for (const value of cells) { const td = document.createElement('td'); td.textContent = value; row.append(td); }
+    body.append(row);
+  }
+  container.querySelector('.scrobble-footer')?.remove();
+  container.querySelector('.scrobble-more')?.remove();
+  const footer = document.createElement('div'); footer.className = 'muted scrobble-footer'; footer.textContent = `Showing ${end.toLocaleString()} of ${tracks.length.toLocaleString()} scrobbles`; container.append(footer);
+  if (end < tracks.length) {
+    const more = document.createElement('button'); more.type = 'button'; more.className = 'scrobble-more'; more.textContent = 'Load 50 more';
+    more.addEventListener('click', () => renderScrobbleBatch(container, tracks, end)); container.append(more);
+  }
+}
+
 async function updateAnalysis() {
   const updateId = ++analysisUpdateId;
   clearAnalysisStale();
@@ -295,6 +402,7 @@ async function updateAnalysis() {
     }
   }
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
+  visibleScrobbles = filtered;
   const rankings = finishRankingCounts(rankingCounts);
   document.querySelectorAll('[data-ranking]').forEach(section => { section.hidden = viewMode !== 'all' && section.dataset.ranking !== viewMode; });
   renderList('tracks', rankings.tracks);
@@ -311,6 +419,11 @@ async function updateAnalysis() {
 
 document.getElementById('categoryFilter').addEventListener('change', event => { categoryFilter = event.target.value; updateAnalysis(); });
 document.getElementById('viewFilter').addEventListener('change', event => { viewMode = event.target.value; updateAnalysis(); });
+document.querySelectorAll('.ranking h2 [data-view]').forEach(button => button.addEventListener('click', () => {
+  viewMode = viewMode === button.dataset.view ? 'all' : button.dataset.view;
+  document.getElementById('viewFilter').value = viewMode;
+  updateAnalysis();
+}));
 document.getElementById('updateAnalysisView').addEventListener('click', () => updateAnalysis());
 document.getElementById('applyBulkCategory').addEventListener('click', async event => {
   const button = event.currentTarget;

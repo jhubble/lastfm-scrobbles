@@ -32,6 +32,16 @@
     a.name { color: #f4f4f5; text-decoration: none; }
     a.name:hover { color: #ff6870; text-decoration: underline; }
     .plays { color: #a8a8b3; white-space: nowrap; font-size: 13px; }
+    button.plays { padding: 0; border: 0; background: transparent; font: inherit; color: #a8a8b3; }
+    button.plays:hover { color: #ff6870; background: transparent; text-decoration: underline; }
+    .ranking h2 button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+    .ranking h2 button:hover { color: #ff6870; background: transparent; text-decoration: underline; }
+    .ranking h2 button:focus-visible, button.plays:focus-visible { outline: 2px solid #ff6870; outline-offset: 3px; }
+    .inline-scrobble-list { grid-column: 1 / -1; min-width: 0; overflow-x: auto; margin: 8px 0; }
+    .inline-scrobble-list table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .inline-scrobble-list th, .inline-scrobble-list td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #323238; }
+    .inline-scrobble-list th { color: #a8a8b3; }
+    .scrobble-footer { margin: 8px 0; font-size: 12px; }
     .empty { color: #a8a8b3; }
     .loading { display: flex; align-items: center; gap: 10px; padding: 14px 16px; margin: 14px 0; background: #202024; border-radius: 8px; color: #d4d4d8; }
     .stale-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 14px 0; background: #332611; border: 1px solid #805b18; border-radius: 8px; color: #fcd34d; }
@@ -80,7 +90,6 @@
           <option value="music">Music</option>
           <option value="audiobook">Audiobooks · automatic and manual</option>
           <option value="all_automatic">Automatic (music + audiobooks)</option>
-          <option value="all_automatic">Automatic (music + audiobooks)</option>
           <option value="manual_audiobook">Audiobooks · manual only</option>
         </select>
         <label for="startDate">Custom range</label>
@@ -100,9 +109,9 @@
       </div>
     </section>
     <div class="rankings">
-      <section class="ranking" data-ranking="tracks"><h2>Top Tracks</h2><ol id="tracks"></ol></section>
-      <section class="ranking" data-ranking="albums"><h2>Top Albums</h2><ol id="albums"></ol></section>
-      <section class="ranking" data-ranking="artists"><h2>Top Artists</h2><ol id="artists"></ol></section>
+      <section class="ranking" data-ranking="tracks"><h2><button type="button" data-view="tracks" aria-label="Show Top Tracks on its own">Top Tracks</button></h2><ol id="tracks"></ol></section>
+      <section class="ranking" data-ranking="albums"><h2><button type="button" data-view="albums" aria-label="Show Top Albums on its own">Top Albums</button></h2><ol id="albums"></ol></section>
+      <section class="ranking" data-ranking="artists"><h2><button type="button" data-view="artists" aria-label="Show Top Artists on its own">Top Artists</button></h2><ol id="artists"></ol></section>
     </div>
     <section class="card insight-section" id="newHits">
       <h2>New hits</h2>
