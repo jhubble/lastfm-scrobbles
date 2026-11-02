@@ -415,14 +415,17 @@ async function updateAnalysis() {
       if (categoryFilter !== 'all') {
         const classification = ScrobbleCategories.classification(username, track);
         const isAudiobook = ScrobbleCategories.includesCategory(classification.category, 'audiobook');
+        const isMusic = ScrobbleCategories.includesCategory(classification.category, 'music');
         const matches = categoryFilter === 'music'
-          ? ScrobbleCategories.includesCategory(classification.category, 'music')
+          ? isMusic
           : categoryFilter === 'audiobook'
             ? isAudiobook
             : categoryFilter === 'automatic_audiobook'
               ? isAudiobook && classification.source === 'automatic'
+              : categoryFilter === 'automatic_music'
+                ? isMusic && classification.source === 'automatic'
               : categoryFilter === 'all_automatic'
-                ? classification.source === 'automatic' && (ScrobbleCategories.includesCategory(classification.category, 'music') || isAudiobook)
+                ? classification.source === 'automatic' && (isMusic || isAudiobook)
                 : isAudiobook && classification.source === 'manual';
         if (!matches) continue;
       }
