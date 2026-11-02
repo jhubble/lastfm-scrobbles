@@ -4,6 +4,7 @@ const username = params.get('username') || '';
 document.getElementById('similarityLink').href = `similarity.html?username=${encodeURIComponent(username)}`;
 let scrobbles = [];
 let visibleScrobbles = [];
+let visibleAutomaticEntityCategories = new Map();
 let itemLimit = 25;
 let categoryFilter = 'all';
 let viewMode = 'all';
@@ -314,7 +315,8 @@ function renderList(id, entries) {
     control.dataset.entityArtist = entity.artist;
     control.dataset.entityName = entity.name;
     const selectedCategory = ScrobbleCategories.entityCategory(entityType, entity.artist, entity.name, scrobbles);
-    const automaticCategory = ScrobbleCategories.automaticEntityCategory(entityType, entity.artist, entity.name, scrobbles);
+    const automaticCategory = visibleAutomaticCategory(entityType, entity.artist, entity.name)
+      || ScrobbleCategories.automaticEntityCategory(entityType, entity.artist, entity.name, scrobbles);
     const automaticLabel = automaticCategory === 'both' ? 'Music and audiobook' : automaticCategory === 'audiobook' ? 'Audiobook' : 'Music';
     const explicitCategory = ScrobbleCategories.entityOverride(entityType, entity.artist, entity.name);
     const inheritedCategory = entityType === 'artist' ? null : ScrobbleCategories.inheritedArtistCategory(entity.artist);
@@ -345,6 +347,38 @@ function renderList(id, entries) {
       markAnalysisStale();
     });
     row.append(control);
+  }
+}
+
+function entityDisplayKey(type, artist, name) {
+  return `${type}\u0000${String(artist || '').toLocaleLowerCase()}\u0000${String(name || '').toLocaleLowerCase()}`;
+}
+
+function visibleAutomaticCategory(type, artistName, entityName) {
+  const key = entityDisplayKey(type, type === 'artist' ? '' : artistName, entityName);
+  const categories = visibleAutomaticEntityCategories.get(key);
+  if (!categories?.size) return null;
+  if (categories.has('both') || (categories.has('music') && categories.has('audiobook'))) return 'both';
+  return categories.values().next().value || null;
+}
+
+function indexVisibleAutomaticCategories(tracks) {
+  visibleAutomaticEntityCategories = new Map();
+  const add = (type, artist, name, category) => {
+    if (!name) return;
+    const key = entityDisplayKey(type, artist, name);
+    const categories = visibleAutomaticEntityCategories.get(key) || new Set();
+    categories.add(category);
+    visibleAutomaticEntityCategories.set(key, categories);
+  };
+  for (const track of tracks) {
+    const rawArtist = textOf(track.artist, 'Unknown artist');
+    const artist = ScrobbleVariants.resolveArtist(rawArtist);
+    const classification = ScrobbleCategories.classification(username, track);
+    if (classification.source !== 'automatic') continue;
+    add('artist', '', artist, classification.category);
+    add('track', artist, ScrobbleVariants.resolveTrack(rawArtist, textOf(track.name)), classification.category);
+    add('album', artist, ScrobbleVariants.resolveAlbum(rawArtist, textOf(track.album)), classification.category);
   }
 }
 
@@ -445,6 +479,7 @@ async function updateAnalysis() {
   }
   document.getElementById('summary').textContent = `${activeRange.label} · ${filtered.length.toLocaleString()} scrobbles`;
   visibleScrobbles = filtered;
+  indexVisibleAutomaticCategories(visibleScrobbles);
   const rankings = finishRankingCounts(rankingCounts);
   document.querySelectorAll('[data-ranking]').forEach(section => { section.hidden = viewMode !== 'all' && section.dataset.ranking !== viewMode; });
   renderList('tracks', rankings.tracks);
