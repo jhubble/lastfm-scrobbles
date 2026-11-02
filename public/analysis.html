@@ -92,7 +92,10 @@
         <input type="number" id="itemLimit" min="1" max="500" value="25">
         <button id="applyLimit">Update</button>
         <label for="bulkCategory">Classify visible results as</label>
-        <select id="bulkCategory" aria-label="Bulk classification"><option value="audiobook">Audiobook</option><option value="music">Music</option><option value="both">Both</option><option value="auto">Automatic</option></select>
+        <select id="bulkCategory" aria-label="Bulk classification"><option value="audiobook">Audiobook</option><option value="music">Music</option><option value="both">Both</option><option value="auto">Automatic</option>
+          <option value="auto_only">Automatic only (auto‑classified)</option>
+<option value="auto_music">Bulk set automatic to Music</option>
+<option value="auto_audiobook">Bulk set automatic to Audiobook</option></select>
         <button id="applyBulkCategory" type="button">Apply to visible results</button>
       </div>
     </section>

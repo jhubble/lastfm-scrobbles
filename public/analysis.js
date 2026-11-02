@@ -315,11 +315,38 @@ document.getElementById('applyBulkCategory').addEventListener('click', async eve
     name: control.dataset.entityName,
   }));
   if (!entities.length) return alert('There are no visible results to classify.');
-  const category = document.getElementById('bulkCategory').value;
-  if (!confirm(`Apply ${category === 'auto' ? 'Automatic' : category} classification to ${entities.length} visible results?`)) return;
+
+  let category = document.getElementById('bulkCategory').value;
+  let entitiesToUpdate = entities;
+
+  // Helper to filter to automatically‑classified items
+  const filterAuto = ents => ents.filter(e => {
+    const track = { artist: e.artist };
+    if (e.type === 'album') track.album = e.name;
+    else if (e.type === 'track') track.name = e.name;
+    const classification = ScrobbleCategories.classification(username, track);
+    return classification.source === 'automatic';
+  });
+
+  if (category === 'auto_only') {
+    entitiesToUpdate = filterAuto(entities);
+    category = 'auto';
+  } else if (category === 'auto_music') {
+    entitiesToUpdate = filterAuto(entities);
+    category = 'music';
+  } else if (category === 'auto_audiobook') {
+    entitiesToUpdate = filterAuto(entities);
+    category = 'audiobook';
+  }
+
+  if (!entitiesToUpdate.length) {
+    return alert('No automatically‑classified items matched the selected bulk operation.');
+  }
+
+  if (!confirm(`Apply ${category === 'auto' ? 'Automatic' : category} classification to ${entitiesToUpdate.length} visible results?`)) return;
   button.disabled = true;
   try {
-    await ScrobbleCategories.setCategories(username, entities, category);
+    await ScrobbleCategories.setCategories(username, entitiesToUpdate, category);
     ScrobbleCategories.prepare(scrobbles);
     await updateAnalysis();
   } catch (error) {
