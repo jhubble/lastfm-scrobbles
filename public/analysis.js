@@ -43,6 +43,44 @@ function clearAnalysisStale() {
   if (notice) notice.hidden = true;
 }
 
+function syncAnalysisUrl() {
+  const url = new URL(location.href);
+  url.searchParams.set('view', viewMode);
+  url.searchParams.set('category', categoryFilter);
+  url.searchParams.set('limit', String(itemLimit));
+  url.searchParams.set('start', String(activeRange.start.getTime()));
+  url.searchParams.set('end', String(activeRange.end.getTime()));
+  history.replaceState(null, '', url);
+}
+
+function restoreAnalysisFilters() {
+  const validValue = (id, value) => [...document.getElementById(id).options].some(option => option.value === value);
+  const requestedView = params.get('view');
+  if (requestedView && validValue('viewFilter', requestedView)) viewMode = requestedView;
+  const requestedCategory = params.get('category');
+  if (requestedCategory && validValue('categoryFilter', requestedCategory)) categoryFilter = requestedCategory;
+  const requestedLimit = Number(params.get('limit'));
+  if (Number.isInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 500) itemLimit = requestedLimit;
+  const start = Number(params.get('start'));
+  const end = Number(params.get('end'));
+  const hasValidRange = params.has('start') && params.has('end') && Number.isFinite(start) && Number.isFinite(end) && start >= 0 && start <= end;
+  if (hasValidRange) {
+    activeRange = { start: new Date(start), end: new Date(end), label: `${new Date(start).toLocaleDateString()} – ${new Date(end).toLocaleDateString()}` };
+  }
+  document.getElementById('viewFilter').value = viewMode;
+  document.getElementById('categoryFilter').value = categoryFilter;
+  document.getElementById('itemLimit').value = itemLimit;
+  if (hasValidRange) {
+    document.getElementById('startDate').value = localDateInputValue(new Date(start));
+    document.getElementById('endDate').value = localDateInputValue(new Date(end));
+  }
+}
+
+function localDateInputValue(date) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function textOf(value, fallback = '') {
   if (typeof value === 'string') return value.trim() || fallback;
   return String(value?.['#text'] || value?.name || fallback).trim();
@@ -362,6 +400,7 @@ function renderScrobbleBatch(container, tracks, start = 0) {
 }
 
 async function updateAnalysis() {
+  syncAnalysisUrl();
   const updateId = ++analysisUpdateId;
   clearAnalysisStale();
   setAnalysisLoading('Filtering scrobbles for the selected time range…');
@@ -580,6 +619,7 @@ async function loadScrobbles() {
   await updateAnalysis();
 }
 
+restoreAnalysisFilters();
 loadScrobbles().catch(error => {
   const loading = document.getElementById('loadingIndicator');
   if (loading) loading.style.display = 'none';
