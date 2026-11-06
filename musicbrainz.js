@@ -159,7 +159,14 @@ async function rateLimitedFetch(url, abortSignal, attempt = 1) {
 
     if (res.status === 429 || res.status === 503) {
       if (attempt <= 3) {
-        const retryAfter = parseInt(res.headers.get('retry-after') || '10', 10);
+        const retryAfterHeader = res.headers.get('retry-after');
+        const parsedRetryAfter = retryAfterHeader && Number.isFinite(Number(retryAfterHeader))
+          ? Number(retryAfterHeader)
+          : retryAfterHeader ? Math.max(0, (Date.parse(retryAfterHeader) - Date.now()) / 1000) : 0;
+        // MusicBrainz can return Retry-After: 0 with a 503 during throttling.
+        // Keep a useful backoff in that case, and still respect longer server hints.
+        const retryAfterSeconds = Number.isFinite(parsedRetryAfter) ? parsedRetryAfter : 0;
+        const retryAfter = Math.ceil(Math.max(res.status === 503 ? 10 : 1, retryAfterSeconds));
         logger.warn('MusicBrainz', `Rate limited (HTTP ${res.status}). Waiting ${retryAfter}s before retry ${attempt}...`);
         await sleep(retryAfter * 1000, abortSignal);
         return rateLimitedFetch(url, abortSignal, attempt + 1);
