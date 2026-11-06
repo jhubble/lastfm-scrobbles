@@ -596,7 +596,7 @@ async function syncNewer() {
 
     setStatus(`Sync complete! Added ${data.added} new scrobbles.`);
     addActivityLog(`✅ Sync complete! Added ${data.added} new scrobbles (total: ${data.total}).`, 'info');
-    await fetchLocalData(false, 'Automatically loading saved scrobbles…');
+    await fetchLocalData(true);
   } catch (err) {
     setStatus('Error during sync: ' + err.message);
     addActivityLog(`❌ Error during sync: ${err.message}`, 'error');
@@ -1300,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const startupUsername = usernameInput?.value.trim();
   if (startupUsername && (startupConfig.autoLoadScrobbles || startupConfig.autoFetchNewerScrobbles)) {
-    await fetchLocalData(true);
+    await fetchLocalData(false, 'Automatically loading saved scrobbles…');
     if (startupConfig.autoFetchNewerScrobbles) {
       try {
         const statusResponse = await fetch(`/api/scrobbles/status/${encodeURIComponent(startupUsername)}`);

@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { loadPreprocessingRules, savePreprocessingRules, detectAudiobookLayouts, preprocessScrobbles } from './preprocessing.js';
-import { processScrobbles as normalizeScrobbles } from './normalizeScrobbles.js';
+import { processScrobbles as normalizeScrobbles, normalizeScrobbleItems } from './normalizeScrobbles.js';
 import {
   initMusicBrainz,
   getMusicBrainzStatus,
@@ -214,21 +214,23 @@ app.put('/api/normalization/config', async (req, res) => {
     const temporary = `${NORMALIZATION_CONFIG_PATH}.${randomUUID()}.tmp`;
     await fs.writeFile(temporary, JSON.stringify(config, null, 2));
     await fs.rename(temporary, NORMALIZATION_CONFIG_PATH);
+    await rebuildAllCompactScrobbles();
     return res.json({ config });
   } catch (err) { return res.status(400).json({ error: `Invalid normalization config: ${err.message}` }); }
 });
 app.post('/api/scrobbles/:username/normalization-preview', async (req, res) => {
   try {
     const [items, savedConfig] = await Promise.all([
-      loadAnalysisScrobbles(req.params.username.trim()),
+      loadScrobbles(req.params.username.trim()),
       fs.readFile(NORMALIZATION_CONFIG_PATH, 'utf8').then(JSON.parse),
     ]);
     const config = req.body?.config || savedConfig;
     const groups = normalizeScrobbles(items, config);
     const groupedPlays = groups.reduce((sum, group) => sum + group.scrobbleCount, 0);
-    return res.json({ username: req.params.username.trim(), sourceScrobbles: items.length, groups, groupedPlays,
+    const examples = groups.filter(group => group.variationsCount > 1).sort((a, b) => b.scrobbleCount - a.scrobbleCount);
+    return res.json({ username: req.params.username.trim(), sourceScrobbles: items.length, groupCount: groups.length, groupedPlays,
       ignoredScrobbles: items.length - groupedPlays,
-      examples: groups.filter(group => group.variationsCount > 1).sort((a, b) => b.scrobbleCount - a.scrobbleCount).slice(0, 100) });
+      exampleCount: examples.length, examples });
   } catch (err) { return res.status(500).json({ error: `Could not preview normalization: ${err.message}` }); }
 });
 app.use(express.static(PUBLIC_DIR));
@@ -365,13 +367,34 @@ async function saveScrobbles(username, scrobbles) {
   const cleanList = Array.from(uniqueMap.values());
   cleanList.sort((a, b) => Number(a.date.uts) - Number(b.date.uts));
   await fs.writeFile(filePath, JSON.stringify(cleanList, null, 2));
-  // Analysis only needs the track identity, album, and timestamp fields.
-  const compactList = cleanList.map(({ name, artist, album, date, mbid }) => ({ name, artist, album, date, ...(mbid ? { mbid } : {}) }));
+  await saveCompactScrobbles(username, cleanList);
+  return cleanList;
+}
+
+async function saveCompactScrobbles(username, scrobbles) {
+  const normalizationConfig = JSON.parse(await fs.readFile(NORMALIZATION_CONFIG_PATH, 'utf8'));
+  const compactList = normalizeScrobbleItems(scrobbles, normalizationConfig)
+    .map(({ name, artist, album, date, mbid }) => ({ name, artist, album, date, ...(mbid ? { mbid } : {}) }));
   const compactPath = getCompactDataFilePath(username);
-  const temporaryPath = `${compactPath}.tmp`;
+  const temporaryPath = `${compactPath}.${randomUUID()}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify(compactList));
   await fs.rename(temporaryPath, compactPath);
-  return cleanList;
+  return compactList;
+}
+
+async function rebuildAllCompactScrobbles() {
+  const files = await fs.readdir(DATA_DIR);
+  const sourceFiles = files.filter(file => file.endsWith('_scrobbles.json'));
+  for (const file of sourceFiles) {
+    const username = file.slice(0, -'_scrobbles.json'.length);
+    try {
+      const scrobbles = JSON.parse(await fs.readFile(path.join(DATA_DIR, file), 'utf8'));
+      if (!Array.isArray(scrobbles)) throw new Error('Scrobble source must be a JSON array.');
+      await saveCompactScrobbles(username, scrobbles);
+    } catch (err) {
+      logger.warn('Normalization', `Could not rebuild compact scrobbles for ${username}: ${err.message}`, err);
+    }
+  }
 }
 
 async function loadAnalysisScrobbles(username) {
@@ -380,10 +403,12 @@ async function loadAnalysisScrobbles(username) {
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
     // Create the compact cache for users with an older full export.
-    return saveScrobbles(username, await loadScrobbles(username)).then(list =>
-      list.map(({ name, artist, album, date, mbid }) => ({ name, artist, album, date, ...(mbid ? { mbid } : {}) })));
+    return saveCompactScrobbles(username, await loadScrobbles(username));
   }
 }
+
+// Upgrade existing compact caches with the active normalization rules.
+await rebuildAllCompactScrobbles();
 
 // Read download progress metadata
 async function loadDownloadProgress(username) {

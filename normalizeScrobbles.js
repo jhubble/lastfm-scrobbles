@@ -7,8 +7,9 @@ export function cleanText(text, config, type = 'general') {
 
   let processed = text;
 
-  // 1. Normalize Unicode characters and strip diacritics/accents (e.g., Björk -> Bjork)
-  processed = processed.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Fold accents on Latin text (e.g., Björk -> Bjork) while preserving marks
+  // that are meaningful in other writing systems.
+  processed = processed.normalize('NFD').replace(/(\p{Script=Latin})\p{M}+/gu, '$1');
 
   // 2. Lowercase normalization
   if (config.lowercaseNormalization) {
@@ -46,7 +47,8 @@ export function cleanText(text, config, type = 'general') {
 
   // 7. Strip punctuation if enabled
   if (config.stripPunctuation) {
-    processed = processed.replace(/[^\w\s]/gi, ' ');
+    // Keep symbols (including emoji) in the grouping key; remove punctuation only.
+    processed = processed.replace(/\p{P}/gu, ' ');
   }
 
   // 8. Collapse extra whitespace
@@ -101,7 +103,7 @@ export function processScrobbles(items, config) {
         },
         scrobbleCount: 0,
         timestamps: [],
-        variationsFound: new Set()
+        variationsFound: new Map()
       });
     }
 
@@ -113,11 +115,18 @@ export function processScrobbles(items, config) {
     }
 
     // Retain distinct raw metadata variations for tracking/auditing
-    group.variationsFound.add(JSON.stringify({
+    const variationKey = JSON.stringify({
       artist: rawArtist,
       track: rawTrack,
       album: rawAlbum
-    }));
+    });
+    const variation = group.variationsFound.get(variationKey) || {
+      artist: rawArtist, track: rawTrack, album: rawAlbum, scrobbleCount: 0,
+      firstTimestamp: Number(item.date?.uts || Number.MAX_SAFE_INTEGER),
+    };
+    variation.scrobbleCount += 1;
+    variation.firstTimestamp = Math.min(variation.firstTimestamp, Number(item.date?.uts || Number.MAX_SAFE_INTEGER));
+    group.variationsFound.set(variationKey, variation);
   });
 
   // Apply minimum scrobble threshold filtering
@@ -125,19 +134,68 @@ export function processScrobbles(items, config) {
 
   const results = Array.from(groupedMap.values())
     .filter(group => group.scrobbleCount >= minThreshold)
-    .map((group) => ({
-      canonical: {
-        artist: group.canonicalArtist,
-        track: group.canonicalTrack,
-        album: group.canonicalAlbum
-      },
-      scrobbleCount: group.scrobbleCount,
-      timestamps: group.timestamps,
-      variationsCount: group.variationsFound.size,
-      variations: Array.from(group.variationsFound).map(v => JSON.parse(v))
-    }));
+    .map((group) => {
+      const variations = Array.from(group.variationsFound.values())
+        .sort((a, b) => b.scrobbleCount - a.scrobbleCount || a.firstTimestamp - b.firstTimestamp);
+      const preferred = variations[0];
+      return {
+        canonical: { artist: preferred.artist, track: preferred.track, album: preferred.album },
+        normalizedKeys: group.normalizedKeys,
+        scrobbleCount: group.scrobbleCount,
+        timestamps: group.timestamps,
+        variationsCount: variations.length,
+        variations: variations.map(({ firstTimestamp, ...variation }, index) => ({ ...variation, preferred: index === 0 }))
+      };
+    });
 
   return results;
+}
+
+/**
+ * Normalize metadata on each scrobble while preserving its timestamp and IDs.
+ * The full scrobble export remains the untouched source of truth.
+ */
+export function normalizeScrobbleItems(items, config) {
+  const groups = processScrobbles(items, config);
+  const canonicalByKey = new Map(groups.map(group => [
+    JSON.stringify([group.normalizedKeys.artist, group.normalizedKeys.track, group.normalizedKeys.album]),
+    group.canonical,
+  ]));
+  const ignoredArtists = new Set(config.ignoreArtists || []);
+  const minThreshold = config.minScrobbleThreshold || 1;
+  const normalizedCounts = new Map();
+  const itemKeys = items.map(item => {
+    const artist = item.artist?.['#text'] || '';
+    const track = item.name || '';
+    const album = item.album?.['#text'] || '';
+    const key = JSON.stringify([
+      cleanText(artist, config, 'artist'),
+      cleanText(track, config, 'track'),
+      cleanText(album, config, 'album'),
+    ]);
+    if (!ignoredArtists.has(artist)) normalizedCounts.set(key, (normalizedCounts.get(key) || 0) + 1);
+    return { key, artist };
+  });
+
+  return items.flatMap((item, index) => {
+    const { key, artist } = itemKeys[index];
+    const count = normalizedCounts.get(key) || 0;
+    if (ignoredArtists.has(artist) || count < minThreshold) return [];
+    const canonical = canonicalByKey.get(key);
+    if (!canonical) return [item];
+    const normalized = { ...item, name: canonical.track };
+    if (item.artist && typeof item.artist === 'object') {
+      normalized.artist = { ...item.artist, '#text': canonical.artist };
+    } else {
+      normalized.artist = canonical.artist;
+    }
+    if (item.album && typeof item.album === 'object') {
+      normalized.album = { ...item.album, '#text': canonical.album };
+    } else if (item.album) {
+      normalized.album = canonical.album;
+    }
+    return [normalized];
+  });
 }
 
 // Execute the cleanup pipeline
