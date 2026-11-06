@@ -308,6 +308,9 @@ function renderList(id, entries) {
     row.append(name, plays); list.append(row);
     const entityType = id === 'tracks' ? 'track' : id === 'albums' ? 'album' : 'artist';
     const entity = { type: entityType, artist: id === 'artists' ? '' : item.secondary || '', name: item.primary };
+    row.dataset.entityType = entity.type;
+    row.dataset.entityArtist = entity.artist;
+    row.dataset.entityName = entity.name;
     const control = document.createElement('select');
     control.className = 'category-select';
     control.setAttribute('aria-label', `Category for ${item.primary}`);
@@ -339,6 +342,8 @@ function renderList(id, entries) {
         control.disabled = false;
         return;
       }
+      indexVisibleAutomaticCategories(visibleScrobbles);
+      updateBulkPreview();
       if (categoryFilter === 'all') {
         control.disabled = false;
         return;
@@ -485,6 +490,7 @@ async function updateAnalysis() {
   renderList('tracks', rankings.tracks);
   renderList('albums', rankings.albums);
   renderList('artists', rankings.artists);
+  updateBulkPreview();
   setAnalysisLoading('Comparing this period with your listening history…');
   await nextAnalysisFrame();
   if (updateId !== analysisUpdateId) return;
@@ -502,6 +508,39 @@ document.querySelectorAll('.ranking h2 [data-view]').forEach(button => button.ad
   updateAnalysis();
 }));
 document.getElementById('updateAnalysisView').addEventListener('click', () => updateAnalysis());
+function getBulkOperation(entities, selection) {
+  let category = selection;
+  let entitiesToUpdate = entities;
+  if (['auto_only', 'auto_music', 'auto_audiobook'].includes(selection)) {
+    entitiesToUpdate = entities.filter(entity =>
+      visibleAutomaticCategory(entity.type, entity.artist, entity.name) !== null
+    );
+    category = selection === 'auto_only' ? 'auto' : selection === 'auto_music' ? 'music' : 'audiobook';
+  }
+  return { category, entitiesToUpdate };
+}
+
+function updateBulkPreview() {
+  const preview = document.getElementById('bulkPreview');
+  if (!preview) return;
+  const rows = [...document.querySelectorAll('[data-ranking]:not([hidden]) li[data-entity-type]')];
+  const entities = rows.map(row => ({
+    type: row.dataset.entityType,
+    artist: row.dataset.entityArtist,
+    name: row.dataset.entityName,
+  }));
+  const selection = document.getElementById('bulkCategory').value;
+  const { category, entitiesToUpdate } = getBulkOperation(entities, selection);
+  const targets = new Set(entitiesToUpdate.map(entity => entityDisplayKey(entity.type, entity.artist, entity.name)));
+  for (const row of document.querySelectorAll('[data-ranking] li[data-entity-type]')) {
+    const key = entityDisplayKey(row.dataset.entityType, row.dataset.entityArtist, row.dataset.entityName);
+    row.classList.toggle('bulk-impact', targets.has(key));
+  }
+  const label = category === 'auto' ? 'Automatic' : category === 'both' ? 'Both' : category[0].toUpperCase() + category.slice(1);
+  preview.textContent = `${entitiesToUpdate.length.toLocaleString()} of ${entities.length.toLocaleString()} visible results highlighted for ${label}.`;
+}
+
+document.getElementById('bulkCategory').addEventListener('change', updateBulkPreview);
 document.getElementById('applyBulkCategory').addEventListener('click', async event => {
   const button = event.currentTarget;
   const controls = [...document.querySelectorAll('[data-ranking]:not([hidden]) .category-select')];
@@ -512,30 +551,32 @@ document.getElementById('applyBulkCategory').addEventListener('click', async eve
   }));
   if (!entities.length) return alert('There are no visible results to classify.');
 
-  let category = document.getElementById('bulkCategory').value;
-  let entitiesToUpdate = entities;
-
-  // Helper to filter to automatically‑classified items
-  const filterAuto = ents => ents.filter(e => {
-    const track = { artist: e.artist };
-    if (e.type === 'album') track.album = e.name;
-    else if (e.type === 'track') track.name = e.name;
-    const classification = ScrobbleCategories.classification(username, track);
-    return classification.source === 'automatic';
-  });
-
-  if (category === 'auto_only') { entitiesToUpdate = filterAuto(entities); category = 'auto'; }
-  else if (category === 'auto_music') { entitiesToUpdate = filterAuto(entities); category = 'music'; }
-  else if (category === 'auto_audiobook') { entitiesToUpdate = filterAuto(entities); category = 'audiobook'; }
+  const selection = document.getElementById('bulkCategory').value;
+  const { category, entitiesToUpdate } = getBulkOperation(entities, selection);
 
   if (!entitiesToUpdate.length) {
+    console.info('[Analysis Bulk Category] No matching entities', {
+      username,
+      selection,
+      visibleEntityCount: entities.length,
+      visibleAutomaticEntityCount: entities.filter(e => visibleAutomaticCategory(e.type, e.artist, e.name) !== null).length,
+    });
     return alert('No automatically‑classified items matched the selected bulk operation.');
   }
 
   if (!confirm(`Apply ${category === 'auto' ? 'Automatic' : category} classification to ${entitiesToUpdate.length} items?`)) return;
+  console.info('[Analysis Bulk Category] Sending request', {
+    username,
+    selection,
+    category,
+    visibleEntityCount: entities.length,
+    requestedEntityCount: entitiesToUpdate.length,
+    entities: entitiesToUpdate,
+  });
   button.disabled = true;
   try {
-    await ScrobbleCategories.setCategories(username, entitiesToUpdate, category);
+    const result = await ScrobbleCategories.setCategories(username, entitiesToUpdate, category);
+    console.info('[Analysis Bulk Category] Request complete', result);
     ScrobbleCategories.prepare(scrobbles);
     await updateAnalysis();
   } catch (error) {

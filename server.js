@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { loadPreprocessingRules, savePreprocessingRules, detectAudiobookLayouts, preprocessScrobbles } from './preprocessing.js';
@@ -237,13 +238,31 @@ async function saveVariants(username, variants) {
 }
 
 async function loadCategories(username) {
+  const filePath = getCategoryFilePath(username);
   try {
-    const parsed = JSON.parse(await fs.readFile(getCategoryFilePath(username), 'utf8'));
+    const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch (err) {
     if (err.code === 'ENOENT') return {};
+    if (err instanceof SyntaxError) {
+      const backupPath = `${filePath}.corrupt.${Date.now()}`;
+      try {
+        await fs.rename(filePath, backupPath);
+        logger.error('Categories', `Corrupted category file for "${username}" moved to ${backupPath}; starting with empty categories`, err);
+        return {};
+      } catch (renameErr) {
+        logger.error('Categories', `Could not preserve corrupted category file for "${username}": ${renameErr.message}`, renameErr);
+      }
+    }
     throw err;
   }
+}
+
+async function saveCategories(username, categories) {
+  const filePath = getCategoryFilePath(username);
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(categories, null, 2));
+  await fs.rename(temporaryPath, filePath);
 }
 
 // Read scrobbles from file
@@ -552,7 +571,6 @@ function extractTracks(recenttracks) {
 }
 
 // --- Download Job Runner -----------------------------------------------------
-import { randomUUID } from 'crypto';
 async function runDownloadJob(username, { restart = false, throttleMs = null } = {}) {
   const key = username.toLowerCase().trim();
 
@@ -978,7 +996,7 @@ app.put('/api/scrobbles/:username/categories', async (req, res) => {
         categories[trackKey] = 'audiobook';
       }
     }
-    await fs.writeFile(getCategoryFilePath(username), JSON.stringify(categories, null, 2));
+    await saveCategories(username, categories);
     return res.json({ username, categories });
   } catch (err) {
     logger.error('Categories', `Could not save local category for ${req.params.username}: ${err.message}`, err);
@@ -988,6 +1006,23 @@ app.put('/api/scrobbles/:username/categories', async (req, res) => {
 
 app.put('/api/scrobbles/:username/categories/bulk', async (req, res) => {
   const { entities, category } = req.body || {};
+  const requestedEntities = Array.isArray(entities) ? entities : [];
+  const typeCounts = requestedEntities.reduce((counts, entity) => {
+    const type = entity?.type || 'invalid';
+    counts[type] = (counts[type] || 0) + 1;
+    return counts;
+  }, {});
+  logger.info('Categories', `Bulk category request for ${req.params.username}`, {
+    category,
+    entityCount: requestedEntities.length,
+    typeCounts,
+    sampleEntities: requestedEntities.slice(0, 25).map(entity => ({
+      type: entity?.type,
+      artist: entity?.artist,
+      name: entity?.name,
+    })),
+    omittedEntityCount: Math.max(0, requestedEntities.length - 25),
+  });
   if (!Array.isArray(entities) || !entities.length || entities.length > 1500 || !['music', 'audiobook', 'both', 'auto'].includes(category)) {
     return res.status(400).json({ error: 'Provide 1 to 1500 entities and a valid category.' });
   }
@@ -999,13 +1034,27 @@ app.put('/api/scrobbles/:username/categories/bulk', async (req, res) => {
   try {
     const username = req.params.username.trim();
     const categories = await loadCategories(username);
+    let changed = 0;
     for (const entity of entities) {
       const key = `${entity.type}\u0000${String(entity.artist || '').trim().toLocaleLowerCase()}\u0000${entity.name.trim().toLocaleLowerCase()}`;
-      if (category === 'auto') delete categories[key];
-      else categories[key] = category;
+      if (category === 'auto') {
+        if (Object.hasOwn(categories, key)) {
+          delete categories[key];
+          changed++;
+        }
+      } else if (categories[key] !== category) {
+        categories[key] = category;
+        changed++;
+      }
     }
-    await fs.writeFile(getCategoryFilePath(username), JSON.stringify(categories, null, 2));
-    return res.json({ username, categories, updated: entities.length });
+    await saveCategories(username, categories);
+    logger.info('Categories', `Bulk category request for ${username} applied`, {
+      category,
+      entityCount: entities.length,
+      changed,
+      unchanged: entities.length - changed,
+    });
+    return res.json({ username, categories, category, updated: entities.length, changed });
   } catch (err) {
     logger.error('Categories', `Could not bulk-save local categories for ${req.params.username}: ${err.message}`, err);
     return res.status(500).json({ error: err.message });

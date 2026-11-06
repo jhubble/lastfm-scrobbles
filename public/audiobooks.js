@@ -193,6 +193,7 @@
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not save bulk categories.');
     overrides = data.categories || {};
+    return { updated: data.updated, changed: data.changed, category: data.category };
   };
   window.ScrobbleCategories = { load, prepare, category, classification, musicBrainzCategory, includesCategory, entityCategory, automaticEntityCategory, entityOverride, inheritedArtistCategory, setCategory, setCategories, guess };
 })();

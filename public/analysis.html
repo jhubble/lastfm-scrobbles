@@ -20,6 +20,9 @@
     button:hover, button.active { background: #e5151f; border-color: #e5151f; }
     select { background: #29292e; color: #eee; border: 1px solid #55555f; border-radius: 5px; padding: 8px 10px; }
     .category-select { width: 140px; min-width: 140px; box-sizing: border-box; }
+    li.bulk-impact { background: #332611; box-shadow: inset 3px 0 #f5b942; }
+    li.bulk-impact::before { color: #f5b942; }
+    #bulkPreview { margin: 8px 0 0; font-size: 13px; }
     input[type="number"] { width: 82px; }
     .period-links { margin-top: 14px; }
     .period-links strong { width: 100%; font-size: 13px; color: #a8a8b3; }
@@ -109,6 +112,7 @@
 <option value="auto_audiobook">Bulk set automatic to Audiobook</option></select>
         <button id="applyBulkCategory" type="button">Apply to visible results</button>
       </div>
+      <p id="bulkPreview" class="muted" role="status" aria-live="polite"></p>
     </section>
     <div class="rankings">
       <section class="ranking" data-ranking="tracks"><h2><button type="button" data-view="tracks" aria-label="Show Top Tracks on its own">Top Tracks</button></h2><ol id="tracks"></ol></section>
