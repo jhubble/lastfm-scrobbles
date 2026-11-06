@@ -22,6 +22,12 @@ function openPreprocessing() {
   window.location.href = `preprocessing.html?username=${encodeURIComponent(username)}`;
 }
 
+function openNormalizationRules() {
+  const username = document.getElementById('username')?.value.trim();
+  if (!username) return alert('Please enter a Last.fm username first.');
+  window.location.href = `normalization.html?username=${encodeURIComponent(username)}`;
+}
+
 // Activity Log Helper
 function addActivityLog(message, type = 'info') {
   // Log to console for debugging
@@ -389,19 +395,19 @@ function connectProgressStream(username) {
   });
 }
 
-async function fetchLocalData(silent = false) {
+async function fetchLocalData(silent = false, loadingMessage = '') {
   console.log('fetchLocalData called with silent=', silent);
 
   const username = document.getElementById('username').value.trim();
   if (!username) return alert('Please enter a username');
 
-  if (!silent) setStatus('Loading local data...');
+  if (!silent || loadingMessage) setStatus(loadingMessage || 'Loading local data...');
   try {
     const res = await fetch(`/api/scrobbles/${encodeURIComponent(username)}`);
     const data = await res.json();
 
     if (!data.stats) {
-      if (!silent) setStatus('No local data found for this user. Click "Download All" to fetch.');
+      if (!silent || loadingMessage) setStatus('No local data found for this user. Click "Download All" to fetch.');
       checkUserStatus(username, true);
       return;
     }
@@ -447,10 +453,10 @@ async function fetchLocalData(silent = false) {
       list.appendChild(li);
     });
 
-    if (!silent) setStatus('Data loaded successfully.');
+    if (!silent || loadingMessage) setStatus('Data loaded successfully.');
     checkUserStatus(username, true);
   } catch (err) {
-    if (!silent) setStatus('Error: ' + err.message);
+    if (!silent || loadingMessage) setStatus('Error loading local data: ' + err.message);
   }
 }
 
@@ -590,7 +596,7 @@ async function syncNewer() {
 
     setStatus(`Sync complete! Added ${data.added} new scrobbles.`);
     addActivityLog(`✅ Sync complete! Added ${data.added} new scrobbles (total: ${data.total}).`, 'info');
-    await fetchLocalData(true);
+    await fetchLocalData(false, 'Automatically loading saved scrobbles…');
   } catch (err) {
     setStatus('Error during sync: ' + err.message);
     addActivityLog(`❌ Error during sync: ${err.message}`, 'error');

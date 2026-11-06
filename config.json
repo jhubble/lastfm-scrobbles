@@ -1,0 +1,46 @@
+{
+  "stripPunctuation": true,
+  "lowercaseNormalization": true,
+  "normalizeAmpersands": true,
+  "stripFeaturingArtists": true,
+  "minScrobbleThreshold": 1,
+  "removeTokens": [
+    "remastered",
+    "remaster",
+    "live",
+    "mono version",
+    "stereo version",
+    "single",
+    "mix",
+    "radio edit",
+    "album version",
+    "deluxe edition",
+    "bonus track",
+    "acoustic"
+  ],
+  "removeVideoTags": [
+    "official music video",
+    "lyric video",
+    "visualizer",
+    "audio",
+    "hd",
+    "hq"
+  ],
+  "removePatterns": [
+    "\\b(disc|cd)\\s*\\d+\\b",
+    "\\b\\d{4}\\s*remaster\\b"
+  ],
+  "ignoreArtists": [
+    "Various Artists",
+    "Unknown Artist"
+  ],
+  "artistAliases": {
+    "apm": "American Public Media",
+    "la iglesia de jesucristo de los santos de los últimos días": "The Church of Jesus Christ of Latter-day Saints",
+    "the beatles - topic": "The Beatles"
+  },
+  "trackAliases": {
+    "99 red balloons": "99 luftballons"
+  },
+  "albumAliases": {}
+}

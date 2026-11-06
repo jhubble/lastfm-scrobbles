@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { loadPreprocessingRules, savePreprocessingRules, detectAudiobookLayouts, preprocessScrobbles } from './preprocessing.js';
+import { processScrobbles as normalizeScrobbles } from './normalizeScrobbles.js';
 import {
   initMusicBrainz,
   getMusicBrainzStatus,
@@ -34,6 +35,8 @@ const API_KEY = process.env.LASTFM_API_KEY;
 const BASE_URL = 'http://ws.audioscrobbler.com/2.0/';
 const DATA_DIR = path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const NORMALIZATION_CONFIG_PATH = path.join(DATA_DIR, 'scrobble_normalization_rules.json');
+const LEGACY_NORMALIZATION_CONFIG_PATH = path.join(__dirname, 'config.json');
 
 // --- Logging Helper ---------------------------------------------------------
 function formatLog(level, category, message, meta) {
@@ -187,6 +190,47 @@ app.get('/api/config', (req, res) => {
     autoFetchNewerScrobbles: process.env.AUTO_FETCH_NEWER_SCROBBLES === 'true',
   });
 });
+app.get('/api/normalization/config', async (req, res) => {
+  try { return res.json(JSON.parse(await fs.readFile(NORMALIZATION_CONFIG_PATH, 'utf8'))); }
+  catch (err) { return res.status(500).json({ error: `Could not read normalization config: ${err.message}` }); }
+});
+app.put('/api/normalization/config', async (req, res) => {
+  const config = req.body?.config;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return res.status(400).json({ error: 'Config must be a JSON object.' });
+  try {
+    // Validate all regex patterns before persisting rules used by preview/normalization.
+    if (config.removePatterns != null && !Array.isArray(config.removePatterns)) throw new Error('removePatterns must be a list.');
+    for (const pattern of config.removePatterns || []) {
+      if (typeof pattern !== 'string') throw new Error('Regex patterns must be strings.');
+      new RegExp(pattern, 'gi');
+    }
+    for (const list of [config.removeTokens || [], config.removeVideoTags || [], config.ignoreArtists || []]) {
+      if (!Array.isArray(list) || list.some(value => typeof value !== 'string')) throw new Error('Rule lists must contain strings.');
+    }
+    for (const aliases of [config.artistAliases, config.trackAliases, config.albumAliases]) {
+      if (aliases != null && (typeof aliases !== 'object' || Array.isArray(aliases) || Object.values(aliases).some(value => typeof value !== 'string'))) throw new Error('Alias rules must map strings to strings.');
+    }
+    if (config.minScrobbleThreshold != null && (!Number.isInteger(config.minScrobbleThreshold) || config.minScrobbleThreshold < 1)) throw new Error('minScrobbleThreshold must be a positive integer.');
+    const temporary = `${NORMALIZATION_CONFIG_PATH}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(config, null, 2));
+    await fs.rename(temporary, NORMALIZATION_CONFIG_PATH);
+    return res.json({ config });
+  } catch (err) { return res.status(400).json({ error: `Invalid normalization config: ${err.message}` }); }
+});
+app.post('/api/scrobbles/:username/normalization-preview', async (req, res) => {
+  try {
+    const [items, savedConfig] = await Promise.all([
+      loadAnalysisScrobbles(req.params.username.trim()),
+      fs.readFile(NORMALIZATION_CONFIG_PATH, 'utf8').then(JSON.parse),
+    ]);
+    const config = req.body?.config || savedConfig;
+    const groups = normalizeScrobbles(items, config);
+    const groupedPlays = groups.reduce((sum, group) => sum + group.scrobbleCount, 0);
+    return res.json({ username: req.params.username.trim(), sourceScrobbles: items.length, groups, groupedPlays,
+      ignoredScrobbles: items.length - groupedPlays,
+      examples: groups.filter(group => group.variationsCount > 1).sort((a, b) => b.scrobbleCount - a.scrobbleCount).slice(0, 100) });
+  } catch (err) { return res.status(500).json({ error: `Could not preview normalization: ${err.message}` }); }
+});
 app.use(express.static(PUBLIC_DIR));
 
 // Explicit route for root serving index.html
@@ -199,6 +243,19 @@ app.get('/', (req, res) => {
 // Ensure data directory exists
 try {
   await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    await fs.access(NORMALIZATION_CONFIG_PATH);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    // Migrate the former project-root config once, preserving its rules.
+    try {
+      const legacyConfig = await fs.readFile(LEGACY_NORMALIZATION_CONFIG_PATH, 'utf8');
+      await fs.writeFile(NORMALIZATION_CONFIG_PATH, legacyConfig);
+      logger.info('Storage', `Migrated normalization rules to ${NORMALIZATION_CONFIG_PATH}`);
+    } catch (legacyErr) {
+      if (legacyErr.code !== 'ENOENT') throw legacyErr;
+    }
+  }
   await initMusicBrainz({ dataDir: DATA_DIR, logger });
   logger.info('Storage', `Data directory initialized at ${DATA_DIR}`);
 } catch (err) {
