@@ -180,7 +180,11 @@ app.use((req, res, next) => {
 app.use(express.json());
 // This endpoint exposes only a non-secret convenience setting to the UI.
 app.get('/api/config', (req, res) => {
-  res.json({ defaultLastFmUsername: process.env.LASTFM_USERNAME || '' });
+  res.json({
+    defaultLastFmUsername: process.env.LASTFM_USERNAME || '',
+    autoLoadScrobbles: process.env.AUTO_LOAD_SCROBBLES === 'true',
+    autoFetchNewerScrobbles: process.env.AUTO_FETCH_NEWER_SCROBBLES === 'true',
+  });
 });
 app.use(express.static(PUBLIC_DIR));
 

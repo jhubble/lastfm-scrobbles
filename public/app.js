@@ -590,7 +590,7 @@ async function syncNewer() {
 
     setStatus(`Sync complete! Added ${data.added} new scrobbles.`);
     addActivityLog(`✅ Sync complete! Added ${data.added} new scrobbles (total: ${data.total}).`, 'info');
-    fetchLocalData(true);
+    await fetchLocalData(true);
   } catch (err) {
     setStatus('Error during sync: ' + err.message);
     addActivityLog(`❌ Error during sync: ${err.message}`, 'error');
@@ -1247,17 +1247,25 @@ function escapeHtml(str) {
 document.addEventListener('DOMContentLoaded', async () => {
   // Pre-fill the optional server-configured account without initiating a Last.fm request.
   const usernameInput = document.getElementById('username');
+  let startupConfig = {};
   if (usernameInput && !usernameInput.value.trim()) {
     try {
       const configResponse = await fetch('/api/config');
       if (configResponse.ok) {
-        const config = await configResponse.json();
-        if (!usernameInput.value.trim() && config.defaultLastFmUsername) {
-          usernameInput.value = config.defaultLastFmUsername;
+        startupConfig = await configResponse.json();
+        if (!usernameInput.value.trim() && startupConfig.defaultLastFmUsername) {
+          usernameInput.value = startupConfig.defaultLastFmUsername;
         }
       }
     } catch (err) {
       console.debug('Could not load default Last.fm username');
+    }
+  } else {
+    try {
+      const configResponse = await fetch('/api/config');
+      if (configResponse.ok) startupConfig = await configResponse.json();
+    } catch (err) {
+      console.debug('Could not load startup preferences');
     }
   }
 
@@ -1281,6 +1289,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } catch (err) {
       console.debug('Using default 1000ms throttle');
+    }
+  }
+
+  const startupUsername = usernameInput?.value.trim();
+  if (startupUsername && (startupConfig.autoLoadScrobbles || startupConfig.autoFetchNewerScrobbles)) {
+    await fetchLocalData(true);
+    if (startupConfig.autoFetchNewerScrobbles) {
+      try {
+        const statusResponse = await fetch(`/api/scrobbles/status/${encodeURIComponent(startupUsername)}`);
+        const status = statusResponse.ok ? await statusResponse.json() : null;
+        if (status?.localCount > 0) {
+          await syncNewer();
+        } else {
+          addActivityLog('ℹ️ Automatic sync skipped because no saved scrobbles exist for this user yet.', 'info');
+        }
+      } catch (err) {
+        console.warn('Could not check local scrobbles before automatic sync:', err.message);
+      }
     }
   }
 

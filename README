@@ -4,6 +4,8 @@ To use:
 * Create a few API Key at Last.fm
 * create an .env file with your API key (see `.env_example` in the repo)
 * optionally set `LASTFM_USERNAME` in `.env` to pre-fill the username field when the dashboard opens
+* optionally set `AUTO_LOAD_SCROBBLES=true` to load that user's saved scrobbles when the dashboard opens
+* optionally set `AUTO_FETCH_NEWER_SCROBBLES=true` to check Last.fm for newer scrobbles when the dashboard opens (requires saved local scrobbles)
 
 # Start with:
 npm start
