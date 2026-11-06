@@ -66,7 +66,7 @@ export function getMbFilePath(username) {
 }
 
 export function getScrobblesFilePath(username) {
-  return path.join(dataDir, `${username.toLowerCase().trim()}_scrobbles.json`);
+  return path.join(dataDir, `${username.toLowerCase().trim()}_scrobbles_small.json`);
 }
 
 // Helper: Escape reserved characters for MusicBrainz Lucene query syntax
@@ -202,8 +202,14 @@ export async function loadUserScrobbles(username) {
   try {
     const data = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(data);
-  } catch {
-    return [];
+  } catch (err) {
+    if (err.code !== 'ENOENT') return [];
+    // Keep existing installations working until their next download or sync.
+    try {
+      return JSON.parse(await fs.readFile(path.join(dataDir, `${username.toLowerCase().trim()}_scrobbles.json`), 'utf-8'));
+    } catch {
+      return [];
+    }
   }
 }
 

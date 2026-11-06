@@ -206,6 +206,7 @@ try {
 }
 
 const getDataFilePath = (username) => path.join(DATA_DIR, `${username.toLowerCase().trim()}_scrobbles.json`);
+const getCompactDataFilePath = (username) => path.join(DATA_DIR, `${username.toLowerCase().trim()}_scrobbles_small.json`);
 const getProgressFilePath = (username) => path.join(DATA_DIR, `${username.toLowerCase().trim()}_download_progress.json`);
 function getCategoryFilePath(username) {
   const localUserKey = String(username || '').trim().toLocaleLowerCase();
@@ -307,7 +308,24 @@ async function saveScrobbles(username, scrobbles) {
   const cleanList = Array.from(uniqueMap.values());
   cleanList.sort((a, b) => Number(a.date.uts) - Number(b.date.uts));
   await fs.writeFile(filePath, JSON.stringify(cleanList, null, 2));
+  // Analysis only needs the track identity, album, and timestamp fields.
+  const compactList = cleanList.map(({ name, artist, album, date, mbid }) => ({ name, artist, album, date, ...(mbid ? { mbid } : {}) }));
+  const compactPath = getCompactDataFilePath(username);
+  const temporaryPath = `${compactPath}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(compactList));
+  await fs.rename(temporaryPath, compactPath);
   return cleanList;
+}
+
+async function loadAnalysisScrobbles(username) {
+  try {
+    return JSON.parse(await fs.readFile(getCompactDataFilePath(username), 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    // Create the compact cache for users with an older full export.
+    return saveScrobbles(username, await loadScrobbles(username)).then(list =>
+      list.map(({ name, artist, album, date, mbid }) => ({ name, artist, album, date, ...(mbid ? { mbid } : {}) })));
+  }
 }
 
 // Read download progress metadata
@@ -1063,7 +1081,7 @@ app.put('/api/scrobbles/:username/categories/bulk', async (req, res) => {
 
 app.get('/api/scrobbles/:username', async (req, res) => {
   const username = req.params.username.trim();
-  const rawScrobbles = await loadScrobbles(username);
+  const rawScrobbles = await loadAnalysisScrobbles(username);
   const config = await loadPreprocessingRules(DATA_DIR, username);
   const scrobbles = preprocessScrobbles(rawScrobbles, config);
   if (scrobbles.length === 0) {

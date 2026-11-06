@@ -74,6 +74,7 @@ function extractNetworkErrorDetails(err) {
 
 // Helper: Get filename for user data
 const getFilename = (username) => `${username.toLowerCase()}_scrobbles.json`;
+const getCompactFilename = (username) => `${username.toLowerCase()}_scrobbles_small.json`;
 const getProgressFilename = (username) => `${username.toLowerCase()}_download_progress.json`;
 
 const loadProgressData = (username) => {
@@ -118,6 +119,8 @@ const saveLocalData = (username, scrobbles) => {
     
     const filename = getFilename(username);
     fs.writeFileSync(filename, JSON.stringify(uniqueScrobbles, null, 2));
+    const compactScrobbles = uniqueScrobbles.map(({ name, artist, album, date, mbid }) => ({ name, artist, album, date, ...(mbid ? { mbid } : {}) }));
+    fs.writeFileSync(getCompactFilename(username), JSON.stringify(compactScrobbles));
     console.log(`Saved ${uniqueScrobbles.length} scrobbles to ${filename}`);
 };
 
