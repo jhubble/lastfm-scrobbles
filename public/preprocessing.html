@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>Scrobble Preprocessing</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#121214;color:#e1e1e6 }
+    body { margin:0;padding:24px } main { max-width:1000px;margin:auto } a { color:#ff6870 } h1 { color:#e5151f }
+    .muted { color:#a8a8b3 } .card { background:#202024;border:1px solid #393940;border-radius:8px;padding:16px;margin:12px 0 }
+    .row { display:flex;gap:12px;align-items:center;flex-wrap:wrap } button { background:#29292e;color:#eee;border:1px solid #55555f;border-radius:5px;padding:8px 12px;cursor:pointer }
+    .status { margin:16px 0 } .rule { border-top:1px solid #393940;padding-top:12px;margin-top:12px }
+  </style>
+</head><body><main>
+  <a id="back">← Back to dashboard</a><h1>Scrobble preprocessing</h1>
+  <p class="muted">Review detected audiobook scrobbles where the book is in the track field, chapter in artist, and author in album. Approved rules are applied when the app loads scrobbles: chapter becomes track, author becomes artist, and book becomes album. The saved source scrobbles are not changed.</p>
+  <p id="status" class="status">Loading saved scrobbles and rules…</p><div id="rules"></div>
+</main><script src="preprocessing.js"></script></body></html>

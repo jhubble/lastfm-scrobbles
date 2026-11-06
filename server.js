@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { loadPreprocessingRules, savePreprocessingRules, detectAudiobookLayouts, preprocessScrobbles } from './preprocessing.js';
 import {
   initMusicBrainz,
   getMusicBrainzStatus,
@@ -925,6 +926,28 @@ app.put('/api/scrobbles/:username/variants', async (req, res) => {
   }
 });
 
+app.get('/api/scrobbles/:username/preprocessing', async (req, res) => {
+  try {
+    const [config, scrobbles] = await Promise.all([loadPreprocessingRules(DATA_DIR, req.params.username), loadScrobbles(req.params.username)]);
+    const candidates = detectAudiobookLayouts(scrobbles);
+    return res.json({ username: req.params.username.trim(), config, candidates });
+  } catch (err) {
+    logger.error('Preprocessing', `Could not load preprocessing rules for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/scrobbles/:username/preprocessing', async (req, res) => {
+  if (!Array.isArray(req.body?.rules) || req.body.rules.length > 1000) return res.status(400).json({ error: 'A valid preprocessing rules list is required.' });
+  try {
+    const config = await savePreprocessingRules(DATA_DIR, req.params.username, req.body.rules);
+    return res.json({ username: req.params.username.trim(), config });
+  } catch (err) {
+    logger.error('Preprocessing', `Could not save preprocessing rules for ${req.params.username}: ${err.message}`, err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/scrobbles/:username/categories', async (req, res) => {
   const { type, artist = '', name, category, relatedTrackNames = [], relatedEntityAliases = [] } = req.body || {};
   if (!['track', 'album', 'artist'].includes(type) || typeof name !== 'string' || !name.trim() || (type !== 'artist' && (typeof artist !== 'string' || !artist.trim())) || !['music', 'audiobook', 'both', 'auto'].includes(category)) {
@@ -987,7 +1010,9 @@ app.put('/api/scrobbles/:username/categories/bulk', async (req, res) => {
 
 app.get('/api/scrobbles/:username', async (req, res) => {
   const username = req.params.username.trim();
-  const scrobbles = await loadScrobbles(username);
+  const rawScrobbles = await loadScrobbles(username);
+  const config = await loadPreprocessingRules(DATA_DIR, username);
+  const scrobbles = preprocessScrobbles(rawScrobbles, config);
   if (scrobbles.length === 0) {
     return res.json({ username, scrobbles: [] });
   }

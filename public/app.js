@@ -16,6 +16,12 @@ function openAnalysis() {
   window.location.href = `analysis.html?username=${encodeURIComponent(username)}`;
 }
 
+function openPreprocessing() {
+  const username = document.getElementById('username')?.value.trim();
+  if (!username) return alert('Please enter a Last.fm username first.');
+  window.location.href = `preprocessing.html?username=${encodeURIComponent(username)}`;
+}
+
 // Activity Log Helper
 function addActivityLog(message, type = 'info') {
   // Log to console for debugging
