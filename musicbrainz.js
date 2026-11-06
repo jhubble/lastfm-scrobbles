@@ -167,7 +167,10 @@ async function rateLimitedFetch(url, abortSignal, attempt = 1) {
         // Keep a useful backoff in that case, and still respect longer server hints.
         const retryAfterSeconds = Number.isFinite(parsedRetryAfter) ? parsedRetryAfter : 0;
         const retryAfter = Math.ceil(Math.max(res.status === 503 ? 10 : 1, retryAfterSeconds));
-        logger.warn('MusicBrainz', `Rate limited (HTTP ${res.status}). Waiting ${retryAfter}s before retry ${attempt}...`);
+        logger.warn(
+          'MusicBrainz',
+          `Rate limited (HTTP ${res.status}; Retry-After: ${retryAfterHeader ?? 'not provided'}). Waiting ${retryAfter}s before retry ${attempt}...`
+        );
         await sleep(retryAfter * 1000, abortSignal);
         return rateLimitedFetch(url, abortSignal, attempt + 1);
       }
