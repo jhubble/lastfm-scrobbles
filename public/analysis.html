@@ -29,7 +29,7 @@
     .rankings { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
     .ranking { background: #202024; border-radius: 8px; padding: 18px; min-width: 0; }
     ol { list-style: none; counter-reset: rank; margin: 0; padding: 0; }
-    li { counter-increment: rank; border-bottom: 1px solid #323238; padding: 10px 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+    li { counter-increment: rank; border-bottom: 1px solid #323238; padding: 10px 0 10px 8px; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
     li::before { content: counter(rank); color: #85858f; font-variant-numeric: tabular-nums; }
     .name { overflow-wrap: anywhere; }
     a.name { color: #f4f4f5; text-decoration: none; }
